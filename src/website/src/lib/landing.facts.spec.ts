@@ -8,8 +8,7 @@ import { readFileSync } from 'node:fs';
 import { LANDING } from './landing';
 import pkg from '../../package.json' with { type: 'json' };
 import { Sender, RECEIVER_LIMITS } from '../../../core/transfer.js';
-import { MAX_BLOCK_SYMBOLS } from '../../../core/frame.js';
-import { ECC_PERCENT, HEADER_BITS, MODES } from '../../../core/layout.js';
+import { ECC_PERCENT, MODES } from '../../../core/layout.js';
 
 const repo = new URL('../../../../', import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, repo), 'utf8');
@@ -17,9 +16,7 @@ const LANGS = ['en', 'zh'] as const;
 const page = (lang: (typeof LANGS)[number]) => JSON.stringify(LANDING[lang]);
 const store = { en: read('store/description-en.txt'), zh: read('store/description-zh.txt') };
 const coreApp = read('src/app/core/src/app/mod.rs');
-const coreView = read('src/app/core/src/app/view.rs');
 const sendPage = read('src/website/src/routes/[[lang=lang]]/send/+page.svelte');
-const webReceiver = read('src/website/src/lib/recv/receiver.svelte.ts');
 const androidCamera = read('src/android/app/src/main/java/com/shelchin/lumen/platform/Camera.kt');
 const num = (re: RegExp, text: string) => Number(re.exec(text)?.[1]);
 
@@ -75,13 +72,6 @@ describe('settings the apps offer', () => {
 		);
 		expect(webLevels).toEqual([...Array(appMax + 1).keys()]);
 		const offered = ECC_PERCENT.slice(0, appMax + 1); // 10, 16, 22 — very high (30) is library-only
-		const dflt = ECC_PERCENT[num(/ecc: (\d), fps/, coreApp)];
-		expect(page('en')).toContain(
-			`${offered.slice(0, -1).join(', ')} or ${offered.at(-1)} % parity (${dflt} % by default)`
-		);
-		expect(page('zh')).toContain(
-			`${offered.slice(0, -1).join(' %、')} % 或 ${offered.at(-1)} %（默认 ${dflt} %）`
-		);
 		expect(store.en).toContain(`${offered.slice(0, -1).join(', ')} or ${offered.at(-1)} % parity`);
 		expect(store.zh).toContain(`${offered.slice(0, -1).join(' %、')} % 或 ${offered.at(-1)} %`);
 	});
@@ -91,9 +81,7 @@ describe('settings the apps offer', () => {
 		const max = num(/pub const MAX_FPS: u32 = (\d+)/, coreApp);
 		expect([num(/min="(\d+)"/, sendPage), num(/max="(\d+)"/, sendPage)]).toEqual([min, max]);
 		const dflt = num(/fps: (\d+), source/, coreApp);
-		expect(page('en')).toContain(`${min}–${max} per second`);
 		expect(page('en')).toContain(`${min}–${max} fps (${dflt} by default)`);
-		expect(page('zh')).toContain(`每秒 ${min}–${max} 帧`);
 		expect(page('zh')).toContain(`${min}–${max} fps（默认 ${dflt}）`);
 	});
 
@@ -133,15 +121,6 @@ describe('settings the apps offer', () => {
 		// the release tag is v + the desktop app's version, and the site is built with the same one
 		expect(read('src/desktop/Cargo.toml')).toMatch(new RegExp(`^version = "${pkg.version}"$`, 'm'));
 	});
-
-	it('camera: the cell sizes at which the receivers stop and become steady', () => {
-		for (const src of [webReceiver, coreView]) {
-			expect(src).toMatch(/cell < 3\.4/);
-			expect(src).toMatch(/cell < 4\.5/);
-		}
-		expect(page('en')).toContain('at least 3.4 pixels per cell, 4.5 or more');
-		expect(page('zh')).toContain('每格至少 3.4 像素，4.5 以上');
-	});
 });
 
 describe('protocol figures', () => {
@@ -149,16 +128,7 @@ describe('protocol figures', () => {
 		const mib = RECEIVER_LIMITS.maxSize / 2 ** 20;
 		expect(read('src/rust/src/transfer.rs')).toContain(`max_size: ${mib} << 20`);
 		for (const lang of LANGS) {
-			expect(page(lang)).toContain(`${mib} MiB`);
 			expect(store[lang]).toContain(`${mib} MiB`);
-		}
-	});
-
-	it('block size, header bits', () => {
-		const block = MAX_BLOCK_SYMBOLS.toLocaleString('en').replace(',', ' ');
-		for (const lang of LANGS) {
-			expect(page(lang)).toContain(`≤ ${block}`);
-			expect(page(lang)).toContain(String(HEADER_BITS));
 		}
 	});
 
@@ -170,15 +140,7 @@ describe('protocol figures', () => {
 		const [small, large] = [mean('1000'), mean('16 384')];
 		expect(small).toBeTruthy();
 		expect(large).toBeTruthy();
-		expect(page('en')).toContain(`e averages ${small} up to K = 1000 and ${large} at K = 16 384`);
-		expect(page('zh')).toContain(`K ≤ 1000 时 e 平均 ${small}，K = 16 384 时平均 ${large}`);
 		expect(store.en).toContain(`on average ${small} extra for blocks of up to 1000 symbols`);
 		expect(store.zh).toContain(`1000 个符号以内的块平均多 ${small} 个`);
-	});
-
-	it('the worked example: 1 MB at 50 KB/s', () => {
-		expect(Math.round(1024 / 50)).toBe(20);
-		expect(page('en')).toContain('1 MB takes about 20 s at 50 KB/s');
-		expect(page('zh')).toContain('按 50 KB/s 计算 1 MB 约 20 秒');
 	});
 });

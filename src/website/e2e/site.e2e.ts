@@ -38,10 +38,14 @@ for (const [url, title, text] of pages) {
 		expect(html).toContain(
 			'<script src="https://tj.appsdata.org/api/script.js" data-site-id="b9594b9f1c70" defer></script>'
 		);
-		// the version as in the apps: "1.0.0 · 1a2b3c4 · date"
-		expect(html).toMatch(
-			new RegExp(`data-build[^>]*>[^<]*${version.replaceAll('.', '\\.')} · [0-9a-f]{7}`)
-		);
+		if (url === '/' || url === '/zh') {
+			expect(html).not.toContain('data-build');
+		} else {
+			// the version as in the apps: "1.0.0 · 1a2b3c4 · date"
+			expect(html).toMatch(
+				new RegExp(`data-build[^>]*>[^<]*${version.replaceAll('.', '\\.')} · [0-9a-f]{7}`)
+			);
+		}
 	});
 }
 

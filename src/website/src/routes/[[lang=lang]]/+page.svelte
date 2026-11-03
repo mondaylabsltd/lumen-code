@@ -6,9 +6,8 @@
 	import { COMPANY, LEGAL } from '#lib/legal';
 	import { BUILD, REPO } from '#lib/build';
 	import Mark from '#lib/ui/Mark.svelte';
-	import Warn from '#lib/ui/Warn.svelte';
-	import BuildLink from '#lib/ui/BuildLink.svelte';
 	import Seo from '#lib/ui/Seo.svelte';
+	import TransferScene from '#lib/ui/TransferScene.svelte';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -16,11 +15,6 @@
 	const t = (key: Key) => tr(lang, key);
 	const c = $derived(LANDING[lang]);
 	const zh = $derived(lang === 'zh');
-	const docs = $derived(
-		zh
-			? { spec: 'PROTOCOL.zh-CN.md', guide: 'guide/README.zh-CN.md' }
-			: { spec: 'PROTOCOL.md', guide: 'guide/README.md' }
-	);
 	const buildGuide = `${REPO}#native-apps-ios-android-desktop`;
 	// the desktop files of this version's GitHub release (names from build-macos-app.sh and
 	// desktop-packages.yml)
@@ -84,13 +78,6 @@
 		g.putImageData(img, 0, 0);
 	});
 
-	// 24-pixel line icons, in the order of c.how.items: frame, Reed–Solomon, fountain code, checks
-	const featureIcons = [
-		'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2.5v2.5H14zM17.5 17.5H20V20h-2.5z',
-		'M12 3l7 3v5.2c0 4.4-3 8-7 9.8-4-1.8-7-5.4-7-9.8V6z',
-		'M12 3.5c3.2 4.2 5.2 6.9 5.2 9.6a5.2 5.2 0 0 1-10.4 0c0-2.7 2-5.4 5.2-9.6zM9.6 13.6a2.6 2.6 0 0 0 2.4 2.5',
-		'M10 6h10M10 12h10M10 18h10M3.5 6l1.2 1.2L7 5M3.5 12l1.2 1.2L7 11M3.5 18l1.2 1.2L7 17'
-	];
 	const appIcons = [
 		'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM3.5 12h17M12 3c2.4 2.7 3.6 5.7 3.6 9s-1.2 6.3-3.6 9c-2.4-2.7-3.6-5.7-3.6-9S9.6 5.7 12 3z',
 		'M8 2.5h8a2 2 0 0 1 2 2v15a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-15a2 2 0 0 1 2-2zM10.5 5h3M11 18.5h2',
@@ -143,11 +130,9 @@
 		<nav class="wrap nav" aria-label="Lumen Code">
 			<a class="brand" href={path(lang, '')}><Mark /><span>Lumen Code</span></a>
 			<div class="links">
-				<a href="#start">{c.nav.start}</a>
 				<a href="#apps">{c.nav.apps}</a>
 				<a href="#how">{c.nav.how}</a>
 				<a href="#speed">{c.nav.speed}</a>
-				<a href="#limits">{c.nav.limits}</a>
 				<a href="#pricing">{c.nav.pricing}</a>
 				<a class="gh" href={REPO} title={t('ghTitle')} aria-label={t('ghTitle')} rel="external">
 					<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"
@@ -166,19 +151,11 @@
 	<main id="main">
 		<section class="hero wrap">
 			<div class="hero-text">
-				<p class="eyebrow">{c.hero.eyebrow}</p>
 				<h1><span>{c.hero.title[0]}</span><br /><em>{c.hero.title[1]}</em></h1>
-				<p class="lead">{c.hero.lead}</p>
 				<div class="actions">
 					<a class="button primary" href={path(lang, 'send')}>{c.hero.send}</a>
 					<a class="button tonal" href={path(lang, 'recv')}>{c.hero.recv}</a>
 				</div>
-				<p class="try">
-					{c.hero.try}
-					<a href={`${REPO}/releases`} rel="external">{c.hero.desktop} →</a>
-				</p>
-				<p class="note">{c.hero.note}</p>
-				<Warn text={t('flashWarn')} />
 			</div>
 			<div class="hero-visual">
 				<figure class="screen">
@@ -196,22 +173,8 @@
 			</div>
 		</section>
 
-		<section id="start" class="section wrap">
-			<h2>{c.start.title}</h2>
-			<ol class="steps">
-				{#each c.start.steps as step, i (step.title)}
-					<li>
-						<span class="step-number">{i + 1}</span>
-						<h3>{step.title}</h3>
-						<p>{step.text}</p>
-					</li>
-				{/each}
-			</ol>
-		</section>
-
 		<section id="apps" class="section wrap">
 			<h2>{c.apps.title}</h2>
-			<p class="section-lead">{c.apps.lead}</p>
 			<ul class="grid four">
 				{#each c.apps.items as item, i (item.name)}
 					<li class="card">
@@ -234,24 +197,15 @@
 
 		<section id="how" class="section wrap">
 			<h2>{c.how.title}</h2>
-			<ol class="flow" aria-label={c.how.flow.map(([a]) => a).join(' → ')}>
-				{#each c.how.flow as [what, note], i (i)}
-					<li class:mid={i > 0 && i < c.how.flow.length - 1}>
-						<span>{what}</span><small>{note}</small>
+			<ol class="flow">
+				{#each c.how.flow as what, i (i)}
+					<li>
+						<TransferScene stage={i} />
+						<h3>{what}</h3>
 					</li>
 				{/each}
 			</ol>
-			<ul class="grid two">
-				{#each c.how.items as item, i (item.title)}
-					<li class="card">
-						<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"
-							><path d={featureIcons[i]} /></svg
-						>
-						<h3>{item.title}</h3>
-						<p>{item.text}</p>
-					</li>
-				{/each}
-			</ul>
+			<p class="how-note">{c.how.note}</p>
 		</section>
 
 		<section id="speed" class="section wrap">
@@ -282,45 +236,6 @@
 					rel="external">{c.speed.more} →</a
 				>
 			</p>
-		</section>
-
-		<section id="limits" class="section wrap">
-			<h2>{c.limits.title}</h2>
-			<p class="section-lead">{c.limits.lead}</p>
-			<ul class="open limits">
-				{#each c.limits.items as item (item.title)}
-					<li>
-						<h3>{item.title}</h3>
-						<p>{item.text}</p>
-					</li>
-				{/each}
-			</ul>
-		</section>
-
-		<section class="section wrap">
-			<h2>{c.open.title}</h2>
-			<ul class="open">
-				{#each c.open.items as item (item.title)}
-					<li>
-						<h3>{item.title}</h3>
-						<p>{item.text}</p>
-					</li>
-				{/each}
-			</ul>
-			<div class="actions">
-				<a class="button tonal" href={`${REPO}/blob/main/docs/${docs.spec}`} rel="external"
-					>{t('specLink')}</a
-				>
-				<a class="button tonal" href={`${REPO}/blob/main/docs/${docs.guide}`} rel="external"
-					>{t('guideLink')}</a
-				>
-				<a
-					class="button tonal"
-					href={`${REPO}/blob/main/test/vectors/test-vectors.json`}
-					rel="external">{t('vectorsLink')}</a
-				>
-				<a class="button tonal" href={REPO} rel="external">{t('ghLink')}</a>
-			</div>
 		</section>
 
 		<section id="pricing" class="section wrap">
@@ -367,32 +282,26 @@
 		<section class="cta wrap">
 			<span class="cta-mark"><Mark /></span>
 			<h2>{c.cta.title}</h2>
-			<p>{c.cta.text}</p>
 			<div class="actions center">
 				<a class="button primary" href={path(lang, 'send')}>{c.hero.send}</a>
 				<a class="button tonal" href={path(lang, 'recv')}>{c.hero.recv}</a>
 			</div>
-			<p class="try"><a href={`${REPO}/releases`} rel="external">{c.hero.desktop} →</a></p>
 		</section>
 	</main>
 
 	<footer class="footer">
 		<div class="wrap footer-inner">
 			<div class="brand"><Mark /><span>Lumen Code</span></div>
-			<p>{t('privacy')}</p>
-			<p>
-				{c.license}
-				<a href={REPO} rel="external">GitHub</a> ·
-				<a href={`${REPO}/releases`} rel="external">{t('releasesLink')}</a> ·
-				<a href={path(zh ? 'en' : 'zh', '')} hreflang={zh ? 'en' : 'zh-CN'}
-					>{zh ? 'English' : '中文'}</a
-				>
-			</p>
+			<p>{c.license}</p>
 			<p class="legal-links">
 				<a href={path(lang, 'privacy')}>{LEGAL[lang].privacy.title}</a> ·
-				<a href={path(lang, 'terms')}>{LEGAL[lang].terms.title}</a>
+				<a href={path(lang, 'terms')}>{LEGAL[lang].terms.title}</a> ·
+				<a
+					href={path(zh ? 'en' : 'zh', '')}
+					hreflang={zh ? 'en' : 'zh-CN'}
+					lang={zh ? 'en' : 'zh-CN'}>{zh ? 'English' : '中文'}</a
+				>
 			</p>
-			<p><BuildLink label={t('buildLabel')} /></p>
 			<p class="quiet">© 2026 {COMPANY}</p>
 		</div>
 	</footer>
@@ -402,6 +311,7 @@
 	.site {
 		--width: 1120px;
 		--gutter: 20px;
+		--nav-height: 64px;
 		--surface: #0f131b;
 		--accent: #7fe3ff;
 		font-size: 17px;
@@ -471,7 +381,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		height: 64px;
+		height: var(--nav-height);
 		gap: 16px;
 	}
 	.brand {
@@ -518,16 +428,11 @@
 	.hero {
 		display: grid;
 		grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+		min-height: calc(100svh - var(--nav-height) - 1px - env(safe-area-inset-top));
 		gap: 56px;
+		align-content: center;
 		align-items: center;
 		padding-block: 72px 48px;
-	}
-	.eyebrow {
-		color: var(--accent);
-		font-weight: 600;
-		font-size: 14px;
-		letter-spacing: 0.02em;
-		margin-bottom: 16px;
 	}
 	h1 {
 		font-size: clamp(40px, 6.4vw, 72px);
@@ -542,12 +447,6 @@
 		background-clip: text;
 		color: transparent;
 	}
-	.lead {
-		margin-top: 24px;
-		color: var(--muted);
-		font-size: 1.12em;
-		max-width: 36em;
-	}
 	.actions {
 		display: flex;
 		flex-wrap: wrap;
@@ -556,23 +455,6 @@
 	}
 	.actions.center {
 		justify-content: center;
-	}
-	.try {
-		margin-top: 14px;
-		color: var(--muted);
-		font-size: 15px;
-	}
-	.try a {
-		white-space: nowrap;
-	}
-	.note {
-		margin-top: 16px;
-		color: var(--faint);
-		font-size: 14px;
-	}
-	.hero-text :global(.warn) {
-		max-width: 36em;
-		margin: 20px 0 0;
 	}
 	.button {
 		display: inline-flex;
@@ -698,113 +580,56 @@
 		font-size: 18px;
 	}
 
-	/* how it works */
+	/* how it works: the same file becomes light, then becomes a file again */
 	.flow {
-		display: flex;
-		align-items: stretch;
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 40px;
 		list-style: none;
-		padding: 0;
-		margin: 40px 0 0;
+		padding: 28px 32px 32px;
+		margin: 32px 0 0;
+		border: 1px solid var(--line);
+		border-radius: 20px;
+		background: var(--surface);
 	}
 	.flow li {
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		gap: 2px;
-		padding: 14px 16px;
-		border: 1px solid var(--line-2);
-		border-radius: 14px;
-		background: var(--surface);
 		position: relative;
 		min-width: 0;
 	}
-	.flow li + li {
-		margin-left: 34px;
-	}
 	.flow li + li::before {
-		content: '';
+		content: '→';
 		position: absolute;
-		left: -28px;
-		top: 50%;
-		width: 22px;
-		height: 2px;
-		background: linear-gradient(90deg, var(--cyan), var(--pink));
-	}
-	.flow li + li::after {
-		content: '';
-		position: absolute;
-		left: -10px;
-		top: calc(50% - 4px);
-		border: 5px solid transparent;
-		border-left-color: var(--pink);
-	}
-	.flow li.mid {
-		background: linear-gradient(135deg, rgba(34, 216, 255, 0.1), rgba(255, 61, 154, 0.1));
-	}
-	.flow span {
-		font-weight: 600;
-		font-size: 15px;
-		overflow-wrap: anywhere;
-	}
-	.flow small {
+		left: -32px;
+		top: 64px;
 		color: var(--faint);
-		font-size: 13px;
+		font-size: 24px;
 	}
-	@media (max-width: 860px) {
+	.flow h3 {
+		margin-top: 20px;
+		font-size: 17px;
+		font-weight: 600;
+		line-height: 1.4;
+		text-align: center;
+	}
+	.how-note {
+		margin-top: 20px;
+		color: var(--muted);
+		font-size: 15px;
+		text-align: center;
+	}
+	@media (max-width: 760px) {
 		.flow {
-			flex-direction: column;
-		}
-		.flow li + li {
-			margin: 26px 0 0;
+			grid-template-columns: minmax(0, 1fr);
+			gap: 48px;
+			padding: 24px;
 		}
 		.flow li + li::before {
-			left: 24px;
-			top: -22px;
-			width: 2px;
-			height: 16px;
-			background: linear-gradient(var(--cyan), var(--pink));
+			content: '↓';
+			left: calc(50% - 8px);
+			top: -42px;
 		}
-		.flow li + li::after {
-			left: 20px;
-			top: -8px;
-			border-left-color: transparent;
-			border-top-color: var(--pink);
-		}
-	}
-	.steps {
-		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 28px;
-		list-style: none;
-		padding: 0;
-		margin: 48px 0 0;
-	}
-	.steps p {
-		margin-top: 8px;
-		color: var(--muted);
-		font-size: 15.5px;
-	}
-	.step-number {
-		display: grid;
-		place-items: center;
-		width: 32px;
-		height: 32px;
-		margin-bottom: 14px;
-		border-radius: 50%;
-		background: rgba(34, 216, 255, 0.12);
-		color: var(--cyan);
-		font-weight: 700;
-		font-size: 15px;
-	}
-	@media (max-width: 900px) {
-		.steps {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-	}
-	@media (max-width: 520px) {
-		.steps {
-			grid-template-columns: minmax(0, 1fr);
+		.flow h3 {
+			margin-top: 12px;
 		}
 	}
 
@@ -863,9 +688,6 @@
 		padding: 0;
 		margin: 36px 0 0;
 	}
-	.grid.two {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-	}
 	.grid.four {
 		grid-template-columns: repeat(4, minmax(0, 1fr));
 	}
@@ -893,47 +715,18 @@
 		stroke-linejoin: round;
 	}
 	@media (max-width: 960px) {
-		.grid.two,
 		.grid.four {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 	}
 	@media (max-width: 560px) {
-		.grid.two,
 		.grid.four {
 			grid-template-columns: minmax(0, 1fr);
 		}
 	}
 
-	/* open protocol */
-	.open {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 28px 40px;
-		list-style: none;
-		padding: 0;
-		margin: 36px 0 0;
-	}
-	.open li {
-		padding-left: 20px;
-		border-left: 3px solid;
-		border-image: linear-gradient(var(--cyan), var(--pink)) 1;
-	}
-	.open.limits li {
-		border-image: linear-gradient(var(--amber), var(--pink)) 1;
-	}
 	.caption a {
 		white-space: nowrap;
-	}
-	.open p {
-		margin-top: 8px;
-		color: var(--muted);
-		font-size: 15.5px;
-	}
-	@media (max-width: 700px) {
-		.open {
-			grid-template-columns: minmax(0, 1fr);
-		}
 	}
 
 	/* pricing */
@@ -1064,10 +857,6 @@
 		margin-bottom: 24px;
 		transform: scale(1.8);
 	}
-	.cta p {
-		margin-top: 12px;
-		color: var(--muted);
-	}
 
 	/* footer */
 	.footer {
@@ -1084,9 +873,6 @@
 		color: var(--text);
 		font-size: 16px;
 		margin-bottom: 4px;
-	}
-	.footer :global(.build) {
-		margin: 0;
 	}
 	.footer a {
 		text-decoration: none;
