@@ -1,11 +1,13 @@
 ## Lumen Code <version>
 
-The first stable release. Protocol 1.0 is final and frozen: every 1.0 receiver reads every 1.0 sender.
+A UI and documentation update. The Protocol 1.0 wire format is unchanged and remains compatible with version 1.0.0.
 
-- Simpler send and receive screens: a permanent control bar that never covers the code; on the receive screen, progress, speed and one hint, with the details folded away.
-- A photosensitivity confirmation before the first code plays.
-- A calmer result screen: the file, Save and Open, and the transfer details on request.
-- The app identifier is now `ltd.mondaylabs.lumencode`. macOS treats this version as a new app: allow the camera again on first use.
+- A compact, centred desktop home screen with consistent send and receive entry panels.
+- Fixed-size file/text panels and aligned actions across the website, Android and iPhone apps.
+- Keyboard completion controls for text input; simpler receiving without the image-import entry.
+- A calmer website transfer illustration, matching app messaging and clearer real-device speed results.
+- Shorter privacy and service terms explaining local processing, transfer risks and responsibility boundaries.
+- Both app languages remain available offline in Android App Bundles.
 
 ## Desktop downloads
 

@@ -26,7 +26,7 @@ Gradle builds the Rust core: the `cargoBuild` task runs `scripts/build-core.sh` 
 |---|---|
 | `debug` | Development. The build is debuggable, so ART interprets much of the UI and checks every JNI call; the interface and every call into Rust run several times slower than in release. Do not judge performance with it. |
 | `bench` | Release code (compiled ahead of time, no JNI checks), profileable with simpleperf, with the test hooks below. |
-| `release` | The app. It is still signed with the debug key; set up a release signing config before publishing. |
+| `release` | The app. Signed with the upload key configured in the git-ignored `keystore.properties`; unsigned when no release key is configured. |
 
 ## Layout
 

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { LEGAL, inline } from './legal';
-import { PRICE } from './landing';
 
 describe('privacy policy and terms', () => {
 	it('both languages have the same sections, in the same order', () => {
@@ -12,12 +11,13 @@ describe('privacy policy and terms', () => {
 		}
 	});
 
-	it('the terms quote the current app price', () => {
+	it('does not hard-code store prices or promise absolute immunity', () => {
 		for (const lang of ['en', 'zh'] as const) {
 			const text = JSON.stringify(LEGAL[lang].terms);
-			expect(text).toContain(PRICE);
-			expect(text.match(/US\$[\d.]+/g)?.every((p) => p === PRICE)).toBe(true);
+			expect(text).not.toMatch(/US\$[\d.]+/);
 		}
+		expect(JSON.stringify(LEGAL.en.terms)).toContain('death or personal injury');
+		expect(JSON.stringify(LEGAL.zh.terms)).toContain('法律不允许排除');
 	});
 
 	it('inline text: bold and links', () => {

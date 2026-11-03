@@ -20,9 +20,9 @@ const pages = [
 	['/zh', 'Lumen Code：不联网，也能传文件', '不联网，'],
 	['/zh/send', '发送文件 — Lumen Code', '选择文件'],
 	['/zh/recv', '接收文件 — Lumen Code', '打开相机'],
-	['/privacy', 'Privacy Policy — Lumen Code', 'never leave your devices'],
+	['/privacy', 'Privacy Policy — Lumen Code', 'never uploaded to our servers'],
 	['/terms', 'Terms of Service — Lumen Code', 'MIT License'],
-	['/zh/privacy', '隐私政策 — Lumen Code', '不离开你的设备'],
+	['/zh/privacy', '隐私政策 — Lumen Code', '不会上传到我们的服务器'],
 	['/zh/terms', '服务条款 — Lumen Code', 'MIT 许可证']
 ] as const;
 
