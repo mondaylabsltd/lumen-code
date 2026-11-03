@@ -57,6 +57,8 @@ footer { margin-top: 40px; color: var(--faint); font-size: 13px; }
 
 <div class="note"><p><b>今天能做到的是“提交审核”，不是“当天上架”。</b>苹果审核通常 1–3 天；谷歌新应用首次审核可能要几天；如果公司账号的 D-U-N-S 和身份验证还没完成，这一步本身就要几天。先做第 1 节，确认账号状态。</p></div>
 
+<p><a href="releases/1.0.1.md">1.0.1 发布资料总览</a>：Android 签名包、iOS archive、截图和文案已准备；iOS 导出前需处理 Apple 的待更新开发者协议。</p>
+
 <div class="bar">
 	<div class="progress" aria-hidden="true"><i id="prog"></i></div>
 	<span id="progText">0 / 0</span>
@@ -78,20 +80,20 @@ footer { margin-top: 40px; color: var(--faint); font-size: 13px; }
 	<li><label><input type="checkbox" data-k="texts" checked><div><div class="t">商店文字（中英文）</div><div class="d">名称、副标题、关键词、简短说明、完整说明，字数已核对：<a href="app-store/listing.md">app-store/listing.md</a>、<a href="google-play/listing.md">google-play/listing.md</a>、<a href="description-zh.txt">description-zh.txt</a> / <a href="description-en.txt">description-en.txt</a>。</div></div><span class="who done">已完成</span></label></li>
 	<li><label><input type="checkbox" data-k="compliance" checked><div><div class="t">隐私与合规问卷答案</div><div class="d"><a href="privacy-and-compliance.md">privacy-and-compliance.md</a>：App 隐私“不收集数据”、Data safety“不收集不分享”、分级、出口合规。</div></div><span class="who done">已完成</span></label></li>
 	<li><label><input type="checkbox" data-k="policy" checked><div><div class="t">隐私政策网址可访问</div><div class="d"><a href="https://lumencode.link/privacy">lumencode.link/privacy</a>（已上线，返回 200）。</div></div><span class="who done">已完成</span></label></li>
-	<li><label><input type="checkbox" data-k="shots-ios"><div><div class="t">iPhone 截图：6.9 英寸 1320×2868，中英文各 3–6 张</div><div class="d">首页、播放中的码、设置、接收进度、收到文字的阅读视图。可用 iPhone 17 Pro Max 模拟器加调试脚本生成。</div></div><span class="who me">Claude 可做</span></label></li>
-	<li><label><input type="checkbox" data-k="shots-gp"><div><div class="t">Android 手机截图：每种语言至少 2 张</div><div class="d">可在 Galaxy S22 上用调试脚本截取。</div></div><span class="who me">Claude 可做</span></label></li>
-	<li><label><input type="checkbox" data-k="icon512"><div><div class="t">Google Play 图标 512×512、宣传图 1024×500</div><div class="d">图标：<code>python3 src/tools/icon.py 512 store/google-play/icon-512.png</code>；宣传图需另做。</div></div><span class="who me">Claude 可做</span></label></li>
-	<li><label><input type="checkbox" data-k="video"><div><div class="t">演示视频，并把链接填进审核说明</div><div class="d">一台设备播放、一台手机接收、打开文件，30–60 秒，放在能直接打开的地址。然后替换 <a href="review-notes.md">review-notes.md</a> 里的 <code>&lt;VIDEO LINK&gt;</code>。</div></div><span class="who you">你</span></label></li>
+	<li><label><input type="checkbox" data-k="shots-ios" checked><div><div class="t">iPhone 截图：6.9 英寸 1320×2868，中英文各 3–6 张</div><div class="d">已准备中英文各 4 张，位于 <code>app-store/screenshots/</code>：首页、发送文本、接收入口、收到文字。</div></div><span class="who done">已完成</span></label></li>
+	<li><label><input type="checkbox" data-k="shots-gp" checked><div><div class="t">Android 手机截图：每种语言至少 2 张</div><div class="d">已准备中英文各 4 张 1080×1920 真实界面截图，位于 <code>google-play/screenshots/</code>。</div></div><span class="who done">已完成</span></label></li>
+	<li><label><input type="checkbox" data-k="icon512" checked><div><div class="t">Google Play 图标 512×512、宣传图 1024×500</div><div class="d">已生成 <code>google-play/icon-512.png</code> 和中英文 <code>feature-*.png</code>，另附 SVG。</div></div><span class="who done">已完成</span></label></li>
+	<li><label><input type="checkbox" data-k="video"><div><div class="t">演示视频，并把链接填进审核说明</div><div class="d">一台设备播放、一台手机接收、打开文件，30–60 秒，放在能直接打开的地址。可在实际上传并确认链接可访问后补充到审核备注；当前备注已提供完整测试步骤，不含占位链接。</div></div><span class="who you">你</span></label></li>
 </ul>
 
 <h2>3 构建 <span class="count">代码侧已就绪</span></h2>
 <ul>
 	<li><label><input type="checkbox" data-k="ready" checked><div><div class="t">上架前的代码问题已修</div><div class="d">iOS 隐私清单、只上 iPhone、首次播放前的光敏确认、Android 发布签名配置、应用标识 <code>ltd.mondaylabs.lumencode</code>。</div></div><span class="who done">已完成</span></label></li>
-	<li><label><input type="checkbox" data-k="key"><div><div class="t">生成 Android 上传密钥（只做一次，离线备份）</div><div class="d">再建 <code>src/android/keystore.properties</code>（git 已忽略）：<code>storeFile</code>、<code>storePassword</code>、<code>keyAlias=upload</code>、<code>keyPassword</code>。
+	<li><label><input type="checkbox" data-k="key" checked><div><div class="t">生成 Android 上传密钥（只做一次，离线备份）</div><div class="d">再建 <code>src/android/keystore.properties</code>（git 已忽略）：<code>storeFile</code>、<code>storePassword</code>、<code>keyAlias=upload</code>、<code>keyPassword</code>。
 		<pre><button class="copy">复制</button>keytool -genkeypair -keystore lumencode-upload.jks -alias upload \
   -keyalg RSA -keysize 4096 -validity 10000</pre></div></div><span class="who you">你</span></label></li>
-	<li><label><input type="checkbox" data-k="aab"><div><div class="t">打 Android 发布包（AAB）</div><div class="d">产物：<code>src/android/app/build/outputs/bundle/release/app-release.aab</code>。工作区要干净，否则版本号带 +dev。
-		<pre><button class="copy">复制</button>cd src/android && ./gradlew :app:bundleRelease</pre></div></div><span class="who me">Claude 可做</span></label></li>
+	<li><label><input type="checkbox" data-k="aab" checked><div><div class="t">打 Android 发布包（AAB）</div><div class="d">产物：<code>src/android/app/build/outputs/bundle/release/app-release.aab</code>。工作区要干净，否则版本号带 +dev。
+		<pre><button class="copy">复制</button>cd src/android && ./gradlew :app:bundleRelease</pre></div></div><span class="who done">已完成</span></label></li>
 	<li><label><input type="checkbox" data-k="ipa"><div><div class="t">打 iOS 包并上传到 App Store Connect</div><div class="d">Xcode 里选 Any iOS Device → Product → Archive → Distribute App → App Store Connect → Upload。Xcode 需登录公司账号。
 		<pre><button class="copy">复制</button>cd src/ios && scripts/build-core.sh && xcodegen generate && open Lumen.xcodeproj</pre></div></div><span class="who you">你</span></label></li>
 </ul>
@@ -123,7 +125,7 @@ footer { margin-top: 40px; color: var(--faint); font-size: 13px; }
 	<li><label><input type="checkbox" data-k="sha"><div><div class="t">公布 Android 签名证书 SHA-256</div><div class="d">Play Console → 应用完整性里复制，写进 README，方便核对安装包。</div></div><span class="who you">你</span></label></li>
 </ul>
 
-<footer>版本 1.0.0（iOS build 1，Android versionCode 1）。每次重新上传都要把 iOS 的 <code>CURRENT_PROJECT_VERSION</code> 和 Android 的 <code>versionCode</code> 加 1。</footer>
+<footer>版本 1.0.1（iOS build 2，Android versionCode 2）。每次重新上传都要把 iOS 的 <code>CURRENT_PROJECT_VERSION</code> 和 Android 的 <code>versionCode</code> 加 1。</footer>
 </main>
 <script>
 (() => {

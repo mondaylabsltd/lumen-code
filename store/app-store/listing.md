@@ -1,18 +1,21 @@
-# App Store listing
+# App Store listing — 1.0.1
 
-Paste into App Store Connect → App Information and the version page. Lengths are checked against the limits.
+可直接填写以下内容；完整描述使用旁边的纯文本文件。版本号 `1.0.1`，构建号 `2`，Bundle ID `ltd.mondaylabs.lumencode`。
 
 | Field | English | 简体中文 |
 |---|---|---|
-| Name (30) | Lumen Code | Lumen Code |
-| Subtitle (30) | Files from screen to camera (27) | 用屏幕和相机传文件，不用网络 (14) |
-| Promotional text (170) | Sends a file from a screen to a camera as colour-coded frames. One-way, offline, no account. Open protocol, MIT-licensed. (121) | 用彩色编码帧把文件从屏幕传到相机。单向、离线、无需账号。开放协议，MIT 许可。 (40) |
-| Keywords (100) | file transfer,offline,camera,qr code,animated qr,air gap,send files,no internet,share,text (90) | 传文件,离线,无网络,相机,二维码,动态二维码,隔离网,发送文件,分享,文字 (38) |
-| Description (4000) | `../description-en.txt` | `../description-zh.txt` |
-| Support URL | https://github.com/mondaylabsltd/lumen-code/issues | 同左 |
+| Name | Lumen Code | Lumen Code |
+| Subtitle | Send files without internet | 不联网，也能传文件 |
+| Promotional text | Move files and text between your devices with a screen and a camera. Fully offline once installed, with no pairing, account or subscription. | 用屏幕发送，用相机接收。文件和文字都能传；安装后完全离线，无需配对、账号或订阅。 |
+| Keywords | file transfer,offline,camera,screen,air gap,send files,no internet,share,text | 传文件,离线,无网络,相机,隔离网,发送文件,分享,文字,跨设备 |
+| Description | [description-en.txt](../description-en.txt) | [description-zh.txt](../description-zh.txt) |
+| What's New | [whats-new-en.txt](../whats-new-en.txt) | [whats-new-zh.txt](../whats-new-zh.txt) |
+| Support URL | https://lumencode.link | https://lumencode.link/zh |
 | Marketing URL | https://lumencode.link | https://lumencode.link/zh |
 | Privacy policy URL | https://lumencode.link/privacy | https://lumencode.link/zh/privacy |
 | Category | Utilities (secondary: Productivity) | |
 | Copyright | 2026 MONDAY LABS LTD | |
 
-Screenshots: 6.9-inch iPhone (1320×2868), 3–6 per language: the home screen, a code playing with the bar, settings open, receiving with progress, a received text in the reader.
+截图：`screenshots/en/` 和 `screenshots/zh/`，每种语言 4 张，均为 iPhone 17 Pro Max 模拟器的真实界面，1320 × 2868，无缩放、无虚构接收进度。文本完成页通过实际编码、解码示例内容得到。
+
+审核说明：[review-notes.md](../review-notes.md)。中国大陆商店的备案、公司交易商身份、付费协议与税务信息仍需账号持有人确认。

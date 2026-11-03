@@ -1,0 +1,7 @@
+A simpler way to start sending and receiving.
+
+- Consistent file, text and receive panels, with stable button positions.
+- Easier keyboard dismissal after entering text.
+- Less clutter before a transfer starts.
+
+Compatible with Protocol 1.0 and earlier 1.0 apps.

@@ -7,8 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { LANDING } from './landing';
 import pkg from '../../package.json' with { type: 'json' };
-import { Sender, RECEIVER_LIMITS } from '../../../core/transfer.js';
-import { ECC_PERCENT } from '../../../core/layout.js';
+import { RECEIVER_LIMITS } from '../../../core/transfer.js';
 
 const repo = new URL('../../../../', import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, repo), 'utf8');
@@ -20,32 +19,6 @@ const sendPage = read('src/website/src/routes/[[lang=lang]]/send/+page.svelte');
 const androidCamera = read('src/android/app/src/main/java/com/shelchin/lumen/platform/Camera.kt');
 const num = (re: RegExp, text: string) => Number(re.exec(text)?.[1]);
 
-/** Payload bytes per frame of the reference sender for a grid (default ECC). */
-function bytesPerFrame(X: number, Y: number, mode: number) {
-	const payload = new Uint8Array(3_000_000);
-	const meta = {
-		name: 'x.bin',
-		fileSize: payload.length,
-		crc: 0,
-		flags: 0,
-		payloadLength: payload.length
-	};
-	const tx = new Sender({ payload, meta }, { mode, ecc: 1, X, Y });
-	return (tx.perFrame ?? 0) * (tx.T ?? 0);
-}
-const kb = (bytes: number, digits = 1) => (bytes / 1024).toFixed(digits); // KB = 1024 bytes
-const rate = (bytes: number) => Math.round((bytes * 12) / 1024); // KB/s at 12 frames a second
-
-describe('store capacity figures', () => {
-	for (const lang of LANGS) {
-		it(`${lang}: laptop payload and raw rate come from the sender`, () => {
-			const laptop = bytesPerFrame(143, 254, 1);
-			expect(store[lang]).toContain(`${kb(laptop)} KB`);
-			expect(store[lang]).toContain(`${rate(laptop)} KB/s`);
-		});
-	}
-});
-
 describe('settings the apps offer', () => {
 	it('error correction: the levels every interface offers', () => {
 		const appMax = num(/self\.ecc = self\.ecc\.min\((\d)\)/, coreApp);
@@ -53,9 +26,6 @@ describe('settings the apps offer', () => {
 			Number(m[1])
 		);
 		expect(webLevels).toEqual([...Array(appMax + 1).keys()]);
-		const offered = ECC_PERCENT.slice(0, appMax + 1); // 10, 16, 22 — very high (30) is library-only
-		expect(store.en).toContain(`${offered.slice(0, -1).join(', ')} or ${offered.at(-1)} % parity`);
-		expect(store.zh).toContain(`${offered.slice(0, -1).join(' %、')} % 或 ${offered.at(-1)} %`);
 	});
 
 	it('frame rate: the web controls use the app core range', () => {
@@ -109,17 +79,5 @@ describe('protocol figures', () => {
 		for (const lang of LANGS) {
 			expect(store[lang]).toContain(`${mib} MiB`);
 		}
-	});
-
-	it('fountain overhead: the means of Appendix C', () => {
-		const spec = read('docs/PROTOCOL.md');
-		const appendix = spec.slice(spec.indexOf('### C.2 Fountain overhead'));
-		const mean = (k: string) =>
-			new RegExp(`^\\| ${k} \\|(?:[^|]*\\|){9} ([\\d.]+) \\|`, 'm').exec(appendix)?.[1];
-		const [small, large] = [mean('1000'), mean('16 384')];
-		expect(small).toBeTruthy();
-		expect(large).toBeTruthy();
-		expect(store.en).toContain(`on average ${small} extra for blocks of up to 1000 symbols`);
-		expect(store.zh).toContain(`1000 个符号以内的块平均多 ${small} 个`);
 	});
 });

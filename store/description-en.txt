@@ -1,26 +1,25 @@
-Lumen Code sends a file from one screen to a camera. The sender shows the file as a sequence of colour-coded frames; the receiver films them and rebuilds the file. It is one-way: no network, no pairing, no account, no return channel.
+Lumen Code — send files without internet.
 
-GETTING STARTED
-1. On the device with the file, tap Send and choose a file or type text.
-2. On the other device, tap Receive and keep the whole code in the camera view.
-3. At 100 % the file has been checked; open, save or share it.
+Move files and text between a screen and a camera. No shared network, pairing or account is needed. Once installed, the app works fully offline.
 
-HOW IT WORKS
-- Frames: a grid sized to the physical screen, 2 bits per cell (4 colours) or 3 (8 colours). Any three of the four corners locate a frame.
-- Error correction: Reed–Solomon on every codeword (10, 16 or 22 % parity), CRC-16 on every packet, size and CRC-32 on the whole file. A file that fails the check is never delivered.
-- Fountain code: missed or blurred frames and any order are fine. A block decodes from slightly more symbols than it holds (on average 1.6 extra for blocks of up to 1000 symbols).
+SEND WHAT YOU NEED
+Choose a file or type text on one device. Point the receiving phone at its screen. View received text and images, then save or share them. Suitable for documents, photos and configuration files; individual files can be up to 256 MiB.
 
-PERFORMANCE
-On a 13-inch laptop screen a frame carries 6.9 KB with 4 colours: 82 KB/s of raw capacity at 12 frames a second. The best end-to-end result so far is 96 KB/s between two phones running the app. What you get depends on the camera; the receive screen shows the live rate.
+MADE FOR REGULAR USE
+The phone app typically receives faster than the web version. Clear progress and live speed show how the transfer is going. Missed frames do not mean starting over: keep scanning to collect more data.
 
-LIMITS
-- Not encrypted: anyone who can see the screen can read the file. Encrypt it first if that matters.
-- The checks catch accidental errors, not tampering.
-- Tens of KB/s: suited to documents, keys, configuration and photos. Files up to 256 MiB.
-- The code flashes up to 60 times a second. People sensitive to flashing light should not look at it; the app asks you to confirm this before the first code plays.
+WORKS ACROSS DEVICES
+Transfer between phones, computers and the free web version at lumencode.link. Useful when devices cannot share a network or USB connection.
 
-PRIVACY
-The app makes no network connections and collects no data.
+ONE PURCHASE
+No subscription, advertising or in-app purchases. Final pricing is shown by the store.
 
-WORKS WITH
-The same app on other phones, the desktop app, and the free web version at lumencode.link. The protocol (version 1.0, frozen) and all the code are open source under the MIT License: https://github.com/mondaylabsltd/lumen-code
+LOCAL PROCESSING
+The app makes no network connections and collects no data. Files and camera images are processed on your device. The protocol and source code are available under the MIT License.
+
+BEFORE YOU TRANSFER
+The displayed code is not encrypted or authenticated. Encrypt sensitive files first and check their source. The code changes colour up to 60 times a second; do not look at it if you are sensitive to flashing light. The app asks for confirmation before the first playback.
+
+Privacy: https://lumencode.link/privacy
+Support: hello@mondaylabs.ltd
+Source: https://github.com/mondaylabsltd/lumen-code
