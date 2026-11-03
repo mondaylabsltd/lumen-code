@@ -5,7 +5,6 @@
 	import { BUILD } from '#lib/build';
 	import { SendController, TEXT_NAME, type Density } from '#lib/send/sender.svelte';
 	import HomeLink from '#lib/ui/HomeLink.svelte';
-	import Warn from '#lib/ui/Warn.svelte';
 	import BuildLink from '#lib/ui/BuildLink.svelte';
 	import Seo from '#lib/ui/Seo.svelte';
 	import type { PageProps } from './$types';
@@ -76,7 +75,7 @@
 	}
 	function setSource(v: 'file' | 'text') {
 		tx?.setSource(v);
-		if (v === 'text') setTimeout(() => textArea?.focus(), 0);
+		textArea?.blur();
 	}
 	function close() {
 		tx?.close();
@@ -173,24 +172,10 @@
 			<span class="spacer"></span>
 		</div>
 
-		<div class="drop" class:over={dropOver} id="drop">
-			<div class="drop-card">
-				<div class="seg tabs" id="srcTabs" role="tablist">
-					<button
-						data-v="file"
-						role="tab"
-						aria-selected={source === 'file'}
-						onclick={() => setSource('file')}>{t('tabFile')}</button
-					>
-					<button
-						data-v="text"
-						role="tab"
-						aria-selected={source === 'text'}
-						onclick={() => setSource('text')}>{t('tabText')}</button
-					>
-				</div>
-				{#if source === 'file'}
-					<div id="paneFile">
+		<div class="drop entry-stage" class:over={dropOver} id="drop">
+			<div class="entry-stack">
+				<div class="drop-card entry-card">
+					<header class="entry-heading">
 						<div class="drop-art">
 							<svg
 								viewBox="0 0 24 24"
@@ -199,62 +184,82 @@
 								stroke-width="1.8"
 								stroke-linecap="round"
 								stroke-linejoin="round"
+								aria-hidden="true"
 								><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5" /><path
 									d="M4 14v3.5A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5V14"
 								/></svg
 							>
 						</div>
-						<h1>{t('dropTitle')}</h1>
-						<p>{t('dropDesc')}</p>
-						<div class="row">
-							<button class="btn primary" id="pick" onclick={() => fileInput?.click()}
-								>{t('choose')}</button
-							>
+						<h1>{t('send')}</h1>
+					</header>
+					<div class="entry-body">
+						<div class="entry-flow">
+							<div class="seg tabs" id="srcTabs" role="tablist" aria-label={t('send')}>
+								<button
+									data-v="file"
+									role="tab"
+									aria-selected={source === 'file'}
+									onclick={() => setSource('file')}>{t('tabFile')}</button
+								>
+								<button
+									data-v="text"
+									role="tab"
+									aria-selected={source === 'text'}
+									onclick={() => setSource('text')}>{t('tabText')}</button
+								>
+							</div>
+							{#if source === 'file'}
+								<div id="paneFile" class="entry-source">
+									<button
+										class="btn primary entry-action"
+										id="pick"
+										onclick={() => fileInput?.click()}>{t('choose')}</button
+									>
+								</div>
+							{:else}
+								<div id="paneText" class="entry-source">
+									<textarea
+										id="textInput"
+										aria-label={t('textPh')}
+										placeholder={t('textPh')}
+										spellcheck="false"
+										bind:this={textArea}
+										bind:value={text}
+										onkeydown={(e) => {
+											if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+												e.preventDefault();
+												sendText();
+											}
+										}}></textarea>
+									<div class="text-meta"><span class="num" id="textCount">{textInfo}</span></div>
+									<button
+										class="btn primary entry-action"
+										id="textSend"
+										disabled={!text}
+										onclick={sendText}>{t('sendText')}</button
+									>
+								</div>
+							{/if}
 						</div>
 					</div>
-				{:else}
-					<div id="paneText">
-						<textarea
-							id="textInput"
-							placeholder={t('textPh')}
-							spellcheck="false"
-							bind:this={textArea}
-							bind:value={text}
-							onkeydown={(e) => {
-								if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-									e.preventDefault();
-									sendText();
-								}
-							}}></textarea>
-						<div class="text-meta">
-							<span class="num" id="textCount">{textInfo}</span><span>{t('textKbd')}</span>
-						</div>
-						<div class="row">
-							<button class="btn primary" id="textSend" disabled={!text} onclick={sendText}
-								>{t('sendText')}</button
-							>
-						</div>
-					</div>
-				{/if}
-				<div class="hint">{t('dropHint')}</div>
-				<Warn text={t('flashWarn')} />
-				<input
-					type="file"
-					id="file"
-					hidden
-					bind:this={fileInput}
-					onchange={() => startFile(fileInput?.files?.[0])}
-				/>
-				<a class="switch-page" href={path(lang, 'recv')}
-					><span>{t('goRecv')}</span><svg
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg
-					></a
-				>
+					<input
+						type="file"
+						id="file"
+						hidden
+						bind:this={fileInput}
+						onchange={() => startFile(fileInput?.files?.[0])}
+					/>
+					<a class="switch-page" href={path(lang, 'recv')}
+						><span>{t('goRecv')}</span><svg
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg
+						></a
+					>
+				</div>
 				<BuildLink label={t('buildLabel')} />
 			</div>
 		</div>

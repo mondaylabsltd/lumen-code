@@ -235,6 +235,35 @@ pub fn panel_box() -> Div {
     div().rounded(px(16.)).bg(panel()).border_1().border_color(line()).shadow_lg()
 }
 
+/// The shared pre-transfer form: one header, one action area and a separate mode switch.
+pub fn entry_panel(icon_name: &str, tint: u32, title: &str) -> Div {
+    div()
+        .w(px(420.)).max_w_full().h(px(520.)).flex_none().p(px(24.)).rounded(px(24.))
+        .bg(c(0x0c1017)).border_1().border_color(line())
+        .flex().flex_col()
+        .child(
+            div().flex().items_center().gap(px(12.)).mb(px(24.))
+                .child(icon_tile(icon_name, tint, 44.))
+                .child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(title.to_string())),
+        )
+}
+
+pub fn entry_stage(content: impl IntoElement, height: f32) -> Stateful<Div> {
+    div().id("entry-stage").size_full().overflow_y_scroll().child(
+        div().w_full().min_h(px(height)).flex().items_center().justify_center()
+            .px(px(20.)).py(px(64.)).child(content),
+    )
+}
+
+pub fn entry_switch(id: &'static str, label: &str, on: impl Fn(&mut Window, &mut App) + 'static) -> Stateful<Div> {
+    div().id(id).w_full().mt_auto().pt(px(8.)).min_h(px(52.)).flex_none()
+        .border_t_1().border_color(line()).flex().items_center().justify_center().gap(px(6.))
+        .text_size(px(14.)).text_color(c(MUTED)).cursor_pointer()
+        .hover(|s| s.text_color(c(TEXT)))
+        .child(label.to_string()).child(icon("arrow", 16., c(MUTED)))
+        .on_click(move |_, window, cx| on(window, cx))
+}
+
 /// Drag state of a slider that outlives each render.
 #[derive(Clone, Default)]
 pub struct SliderState {

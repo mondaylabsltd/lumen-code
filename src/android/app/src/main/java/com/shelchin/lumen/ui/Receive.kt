@@ -266,7 +266,9 @@ private fun Hud(model: AppModel, r: RecvVM, details: Boolean, toggleDetails: () 
             Spacer(Modifier.width(10.dp))
             DetailsToggle(model.t("details"), details, toggleDetails)
         }
-        Label(r.tip, size = 13.sp, color = if (r.tipOk) Lumen.muted else Lumen.amber, lines = 2)
+        if (details || !r.tipOk) {
+            Label(r.tip, size = 13.sp, color = if (r.tipOk) Lumen.muted else Lumen.amber, lines = 2)
+        }
         if (details) {
             Box(Modifier.padding(top = 10.dp).fillMaxWidth().height(1.dp).background(Lumen.line))
             FlowRow(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -309,47 +311,26 @@ private fun DetailsToggle(label: String, open: Boolean, toggle: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StartPane(model: AppModel, r: RecvVM) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Lumen.bg)
-            .background(Brush.radialGradient(listOf(Lumen.pink.copy(alpha = 0.08f), Color.Transparent), center = Offset(540f, 600f), radius = 1100f)),
-    ) {
-        Column(
-            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).verticalScroll(rememberScrollState()).padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+    Box(Modifier.fillMaxSize().background(Lumen.bg).windowInsetsPadding(WindowInsets.safeDrawing)) {
+        EntryPane(Icons.viewfinder, Lumen.pink, model.t("recvTitle"), model.t("goSend"),
+            onSwitch = { model.dispatch(Ev.navigate("send")) },
         ) {
-            Column(Modifier.widthIn(max = 420.dp).padding(top = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                IconTile(Icons.viewfinder, Lumen.pink)
-                Label(model.t("recvStartTitle"), size = 24.sp, weight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
-                Text(model.t("recvStartDesc"), color = Lumen.muted, fontSize = 15.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(bottom = 22.dp))
-                // permission denied: asking again does nothing, so Settings is the way forward
-                val denied = r.canOpenSettings
-                if (denied) r.error?.let {
-                    Text(it, color = Lumen.red, fontSize = 14.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(bottom = 16.dp))
+            Column(Modifier.fillMaxWidth().height(320.dp)) {
+                r.error?.let {
+                    Text(it, color = Lumen.red, fontSize = 14.sp, modifier = Modifier.padding(bottom = 16.dp))
                 }
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (denied) LumenButton(model.t("openSettings"), primary = true) { model.dispatch(Ev.openSettings) }
-                    LumenButton(model.t("openCam"), primary = !denied, enabled = !r.cameraStarting, leading = if (r.cameraStarting) {
-                        { CircularProgressIndicator(color = if (denied) Lumen.text else Lumen.ink, strokeWidth = 2.dp, modifier = Modifier.size(16.dp)) }
-                    } else null) { model.dispatch(Ev.openCamera) }
-                    LumenButton(model.t("fromImage")) { model.dispatch(Ev.pickImage) }
-                }
-                if (!denied) r.error?.let {
-                    Text(it, color = Lumen.red, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
-                }
-                r.note?.let { Text(it, color = Lumen.amber, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp)) }
-                Row(
-                    Modifier.padding(top = 26.dp).clickable { model.dispatch(Ev.navigate("send")) },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Label(model.t("goSend"), size = 13.sp, color = Lumen.muted, weight = FontWeight.Medium)
-                    Icon(Icons.arrowRight, null, tint = Lumen.muted, modifier = Modifier.size(16.dp))
+                r.note?.let { Text(it, color = Lumen.amber, fontSize = 13.sp, modifier = Modifier.padding(top = 14.dp)) }
+                Spacer(Modifier.weight(1f))
+                if (r.canOpenSettings) {
+                    LumenButton(model.t("openSettings"), primary = true, modifier = Modifier.fillMaxWidth().height(48.dp)) { model.dispatch(Ev.openSettings) }
+                } else {
+                    LumenButton(model.t("openCam"), primary = true, enabled = !r.cameraStarting,
+                        modifier = Modifier.fillMaxWidth().height(48.dp), leading = if (r.cameraStarting) {
+                            { CircularProgressIndicator(color = Lumen.ink, strokeWidth = 2.dp, modifier = Modifier.size(16.dp)) }
+                        } else null,
+                    ) { model.dispatch(Ev.openCamera) }
                 }
             }
         }

@@ -2,13 +2,13 @@
 // test here recomputes a number from the implementation (src/core, the app core's sources, the
 // web app) or from the protocol (docs/PROTOCOL.md) and checks that the texts say exactly that,
 // in both languages. Change the code or the spec and these fail until the texts follow.
-// Not covered: field measurements (the 96 KB/s end-to-end result), which the texts label as such.
+// Field measurements cannot be recomputed from capacity; their scope is documented in the guide.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { LANDING } from './landing';
 import pkg from '../../package.json' with { type: 'json' };
 import { Sender, RECEIVER_LIMITS } from '../../../core/transfer.js';
-import { ECC_PERCENT, MODES } from '../../../core/layout.js';
+import { ECC_PERCENT } from '../../../core/layout.js';
 
 const repo = new URL('../../../../', import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, repo), 'utf8');
@@ -36,30 +36,12 @@ function bytesPerFrame(X: number, Y: number, mode: number) {
 const kb = (bytes: number, digits = 1) => (bytes / 1024).toFixed(digits); // KB = 1024 bytes
 const rate = (bytes: number) => Math.round((bytes * 12) / 1024); // KB/s at 12 frames a second
 
-describe('performance table', () => {
+describe('store capacity figures', () => {
 	for (const lang of LANGS) {
-		it(`${lang}: per-frame payload and raw rate come from the sender`, () => {
-			const rows = LANDING[lang].speed.rows;
-			const grid = (cell: string) => cell.split('×').map((n) => Number(n.trim()));
-			const [phoneX, phoneY] = grid(rows[0][2]);
-			const [lapX, lapY] = grid(rows[0][3]);
-			// animated QR v25 at ECC L: 17 + 4·25 modules, 1273 bytes in byte mode (ISO/IEC 18004)
-			expect(rows[0][1]).toBe('117 × 117');
-			expect(rows[2][1]).toBe(`${kb(1273, 2)} KB`);
-			expect(rows[3][1]).toBe(`${rate(1273)} KB/s`);
-			// bits per cell: 4 colours (C4) on the phone, 4 or 8 colours (C8) on the laptop
-			expect(rows[1][2]).toBe(String(MODES[1].bpc));
-			expect(rows[1][3]).toBe(`${MODES[1].bpc} / ${MODES[2].bpc}`);
-			const phone = bytesPerFrame(phoneX, phoneY, 1);
-			const lap4 = bytesPerFrame(lapX, lapY, 1);
-			const lap8 = bytesPerFrame(lapX, lapY, 2);
-			expect(rows[2][2]).toBe(`${kb(phone)} KB`);
-			expect(rows[2][3]).toBe(`${kb(lap4)} / ${kb(lap8)} KB`);
-			expect(rows[3][2]).toBe(`${rate(phone)} KB/s`);
-			expect(rows[3][3]).toBe(`${rate(lap4)} / ${rate(lap8)} KB/s`);
-			// the store descriptions quote the laptop figures
-			expect(store[lang]).toContain(`${kb(lap4)} KB`);
-			expect(store[lang]).toContain(`${rate(lap4)} KB/s`);
+		it(`${lang}: laptop payload and raw rate come from the sender`, () => {
+			const laptop = bytesPerFrame(143, 254, 1);
+			expect(store[lang]).toContain(`${kb(laptop)} KB`);
+			expect(store[lang]).toContain(`${rate(laptop)} KB/s`);
 		});
 	}
 });
@@ -76,13 +58,10 @@ describe('settings the apps offer', () => {
 		expect(store.zh).toContain(`${offered.slice(0, -1).join(' %、')} % 或 ${offered.at(-1)} %`);
 	});
 
-	it('frame rate: the range of the apps and the web, and the default', () => {
+	it('frame rate: the web controls use the app core range', () => {
 		const min = num(/pub const MIN_FPS: u32 = (\d+)/, coreApp);
 		const max = num(/pub const MAX_FPS: u32 = (\d+)/, coreApp);
 		expect([num(/min="(\d+)"/, sendPage), num(/max="(\d+)"/, sendPage)]).toEqual([min, max]);
-		const dflt = num(/fps: (\d+), source/, coreApp);
-		expect(page('en')).toContain(`${min}–${max} fps (${dflt} by default)`);
-		expect(page('zh')).toContain(`${min}–${max} fps（默认 ${dflt}）`);
 	});
 
 	it('phone cameras: the fastest capture a sender can ask for (README)', () => {

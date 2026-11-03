@@ -66,6 +66,8 @@ struct BrandMark: View {
 struct LumenButtonStyle: ButtonStyle {
     var primary = false
     var compact = false
+    var fill = false
+    var height: CGFloat? = nil
     @Environment(\.isEnabled) private var enabled
 
     func makeBody(configuration: Configuration) -> some View {
@@ -73,7 +75,7 @@ struct LumenButtonStyle: ButtonStyle {
             .font(.system(size: 15, weight: .semibold))
             .lineLimit(1)
             .padding(.horizontal, compact ? 14 : 18)
-            .frame(minHeight: 44)
+            .frame(maxWidth: fill ? .infinity : nil, minHeight: height ?? 44, maxHeight: height)
             .foregroundStyle(primary ? Theme.ink : Theme.text)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)

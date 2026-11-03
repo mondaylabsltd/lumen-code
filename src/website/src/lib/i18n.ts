@@ -6,7 +6,7 @@ export const LANGS: Lang[] = ['en', 'zh'];
 
 export const DICT = {
 	zh: {
-		titleHome: 'Lumen Code：用屏幕和相机传文件，不需要网络',
+		titleHome: 'Lumen Code：不联网，也能传文件',
 		descHome:
 			'把文件显示成彩色动态码，用另一台设备的相机扫描接收。不需要网络、配对和账号；网页版和桌面版免费，开放协议，MIT 许可。',
 		titleSend: '发送文件 — Lumen Code',
@@ -25,8 +25,8 @@ export const DICT = {
 		privacy: '文件不经过任何服务器。',
 		guideLink: '开发者指南',
 		home: '返回首页',
-		goSend: '要发送？去发送页',
-		goRecv: '要接收？去接收页',
+		goSend: '去发送',
+		goRecv: '去接收',
 		zoomHint: '双指在画面上缩放；轻点恢复 1×',
 		dropTitle: '发送文件',
 		dropDesc: '拖入文件，或点击选择。',
@@ -39,6 +39,7 @@ export const DICT = {
 		closeCode: '关闭',
 		textPh: '输入或粘贴文字',
 		send: '发送',
+		receive: '接收',
 		density: '密度',
 		dAuto: '自动',
 		dLow: '低',
@@ -131,7 +132,7 @@ export const DICT = {
 		ghTitle: 'Source on GitHub',
 		releasesLink: 'Download for desktop',
 		privacy: 'Files never go through a server.',
-		titleHome: 'Lumen Code: send files from a screen to a camera, no network needed',
+		titleHome: 'Lumen Code: send files without internet',
 		descHome:
 			'Show a file as an animated colour code and receive it with another device’s camera. No network, pairing or account. Free web and desktop versions; open protocol, MIT-licensed.',
 		titleSend: 'Send a file — Lumen Code',
@@ -142,8 +143,8 @@ export const DICT = {
 			'Scan the Lumen Code on another screen with a phone or computer camera to receive a file or text. No network, no pairing; everything stays in the browser.',
 		guideLink: 'Developer guides',
 		home: 'Back to home',
-		goSend: 'Sending instead? Go to Send',
-		goRecv: 'Receiving instead? Go to Receive',
+		goSend: 'Send instead',
+		goRecv: 'Receive instead',
 		zoomHint: 'Pinch the image to zoom; tap to reset to 1×',
 		dropTitle: 'Send a file',
 		dropDesc: 'Drop a file here, or click to choose.',
@@ -157,6 +158,7 @@ export const DICT = {
 		closeCode: 'Close',
 		textPh: 'Type or paste text',
 		send: 'Send',
+		receive: 'Receive',
 		density: 'Density',
 		dAuto: 'Auto',
 		dLow: 'Low',

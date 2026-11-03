@@ -15,16 +15,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -60,7 +60,8 @@ fun Root(model: AppModel) {
             }
             // back from a code (playing, paused or waiting on the warning) closes it and returns
             // to the pick screen (open settings close first); from anywhere else it goes home
-            BackHandler(enabled = v.screen != "home") {
+            val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+            BackHandler(enabled = v.screen != "home" && !keyboardVisible) {
                 val now = model.view
                 if (now?.screen == "send" && now.send.phase != "pick" && now.send.settingsOpen && !now.send.flashAsk) model.dispatch(Ev.toggleSettings)
                 else if (now?.screen == "send" && now.send.phase != "pick") model.dispatch(Ev.closeSend)
@@ -70,17 +71,20 @@ fun Root(model: AppModel) {
     }
 }
 
-/** The landing screen: brand, hero, the two choices and the facts (the web's index.html). */
+/** The home screen: brand, headline and the two actions. */
 @Composable
 fun HomeScreen(model: AppModel) {
     BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-        val wide = maxWidth > 600.dp
+        val wide = maxWidth > maxHeight
+        val compact = maxHeight < 520.dp
+        val heroSize = if (compact) 26.sp else 36.sp
+        val heroLine = if (compact) 30.sp else 40.sp
         Column(
             Modifier
+                .align(Alignment.TopCenter)
+                .widthIn(max = 980.dp)
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .widthIn(max = 980.dp),
+                .padding(horizontal = 20.dp),
         ) {
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 BrandMark()
@@ -95,39 +99,22 @@ fun HomeScreen(model: AppModel) {
                         .padding(horizontal = 10.dp, vertical = 5.dp),
                 ) { Label("中 / EN", size = 12.sp, color = Lumen.muted) }
             }
-            Column(Modifier.padding(top = 48.dp, bottom = 30.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Column {
-                    Text(model.t("heroA"), color = Lumen.text, fontSize = 36.sp, fontWeight = FontWeight.Bold, lineHeight = 40.sp)
-                    Text(model.t("heroB"), style = TextStyle(brush = Lumen.hero, fontSize = 36.sp, fontWeight = FontWeight.Bold, lineHeight = 40.sp))
-                }
-                Label(model.t("heroP"), size = 16.sp, color = Lumen.muted)
+            Column(Modifier.padding(top = if (compact) 16.dp else 32.dp, bottom = 24.dp)) {
+                Text(model.t("heroA"), color = Lumen.text, fontSize = heroSize, fontWeight = FontWeight.Bold, lineHeight = heroLine)
+                Text(model.t("heroB"), style = TextStyle(brush = Lumen.hero, fontSize = heroSize, fontWeight = FontWeight.Bold, lineHeight = heroLine))
             }
             if (wide) {
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    ChoiceCard(Icons.screen, Lumen.cyan, model.t("sendTitle"), model.t("sendDesc"), model.t("go"), Modifier.weight(1f)) { model.dispatch(Ev.navigate("send")) }
-                    ChoiceCard(Icons.viewfinder, Lumen.pink, model.t("recvTitle"), model.t("recvDesc"), model.t("go"), Modifier.weight(1f)) { model.dispatch(Ev.navigate("receive")) }
+                Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    ChoiceCard(Icons.screen, Lumen.cyan, model.t("sendTitle"), Modifier.weight(1f).fillMaxHeight()) { model.dispatch(Ev.navigate("send")) }
+                    ChoiceCard(Icons.viewfinder, Lumen.pink, model.t("recvTitle"), Modifier.weight(1f).fillMaxHeight()) { model.dispatch(Ev.navigate("receive")) }
                 }
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    ChoiceCard(Icons.screen, Lumen.cyan, model.t("sendTitle"), model.t("sendDesc"), model.t("go")) { model.dispatch(Ev.navigate("send")) }
-                    ChoiceCard(Icons.viewfinder, Lumen.pink, model.t("recvTitle"), model.t("recvDesc"), model.t("go")) { model.dispatch(Ev.navigate("receive")) }
+                Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    ChoiceCard(Icons.screen, Lumen.cyan, model.t("sendTitle"), Modifier.weight(1f)) { model.dispatch(Ev.navigate("send")) }
+                    ChoiceCard(Icons.viewfinder, Lumen.pink, model.t("recvTitle"), Modifier.weight(1f)) { model.dispatch(Ev.navigate("receive")) }
                 }
             }
-            Box(Modifier.padding(top = 36.dp).fillMaxWidth().height(1.dp).background(Lumen.line))
-            val facts = listOf("f1t" to "f1p", "f2t" to "f2p", "f3t" to "f3p", "f4t" to "f4p")
-            Column(Modifier.padding(top = 26.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                for (row in facts.chunked(2)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                        for ((t, p) in row) {
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Label(model.t(t), size = 14.sp, weight = FontWeight.SemiBold)
-                                Label(model.t(p), size = 13.sp, color = Lumen.muted)
-                            }
-                        }
-                    }
-                }
-            }
-            Label(model.t("foot"), size = 12.sp, color = Lumen.faint, modifier = Modifier.padding(top = 32.dp))
+            Label(model.t("foot"), size = 12.sp, color = Lumen.faint, modifier = Modifier.padding(top = 20.dp))
             // the version, for reports: app version and the commit of the sources
             Text(
                 "${model.t("buildLabel")} ${com.shelchin.lumen.BuildConfig.VERSION_NAME} · ${model.view?.build ?: ""}",
@@ -141,11 +128,11 @@ fun HomeScreen(model: AppModel) {
 }
 
 @Composable
-private fun ChoiceCard(icon: ImageVector, tint: Color, title: String, desc: String, go: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun ChoiceCard(icon: ImageVector, tint: Color, title: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
     val shape = RoundedCornerShape(20.dp)
-    Column(
+    Row(
         modifier
             .fillMaxWidth()
             .scale(if (pressed) 0.98f else 1f)
@@ -154,11 +141,10 @@ private fun ChoiceCard(icon: ImageVector, tint: Color, title: String, desc: Stri
             .border(1.dp, Lumen.line, shape)
             .clickable(interactionSource = src, indication = null, onClick = onClick)
             .padding(22.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         IconTile(icon, tint, size = 46.dp)
-        Label(title, size = 20.sp, weight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
-        Label(desc, size = 14.sp, color = Lumen.muted)
-        Label(go, size = 14.sp, weight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
+        Label(title, size = 20.sp, weight = FontWeight.SemiBold)
     }
 }

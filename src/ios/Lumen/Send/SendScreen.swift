@@ -145,28 +145,20 @@ private struct PickCard: View {
     }
 
     var body: some View {
-        GeometryReader { outer in
-            ScrollView {
-                card.frame(maxWidth: .infinity, minHeight: outer.size.height)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .scrollIndicators(.hidden)
-        }
-    }
-
-    private var card: some View {
+        EntryPanel(symbol: "square.and.arrow.up", tint: Theme.cyan, title: model.t("sendTitle"), switchLabel: model.t("goRecv"),
+            onSwitch: { model.dispatch(Ev.navigate(.receive)) }
+        ) {
             VStack(spacing: 0) {
-                Segmented(items: [("file", model.t("tabFile")), ("text", model.t("tabText"))], selected: send.sourceTab, minWidth: 84) {
+                Segmented(items: [("file", model.t("tabFile")), ("text", model.t("tabText"))], selected: send.sourceTab, fill: true, height: 38) {
+                    focused = false
                     model.dispatch(Ev.sourceTab($0))
                     Haptics.play("selection")
                 }
-                .padding(.bottom, 22)
+                .padding(.bottom, 24)
 
                 if send.sourceTab == "file" {
-                    IconTile(symbol: "square.and.arrow.up", tint: Theme.cyan)
-                    Text(model.t("dropTitle")).font(.system(size: 22, weight: .semibold)).foregroundStyle(Theme.text).padding(.top, 16)
-                    Text(send.dropDesc).font(.system(size: 15)).foregroundStyle(Theme.muted).multilineTextAlignment(.center).padding(.top, 6).padding(.bottom, 22)
-                    Button(model.t("choose")) { model.dispatch(Ev.pickFile) }.buttonStyle(LumenButtonStyle(primary: true))
+                    Spacer(minLength: 0)
+                    Button(model.t("choose")) { model.dispatch(Ev.pickFile) }.buttonStyle(LumenButtonStyle(primary: true, fill: true, height: 48))
                 } else {
                     ZStack(alignment: .topLeading) {
                         TextEditor(text: $text)
@@ -178,7 +170,7 @@ private struct PickCard: View {
                             .font(.system(size: 15))
                             .foregroundStyle(Theme.text)
                             .padding(10)
-                            .frame(minHeight: 190, maxHeight: 320)
+                            .frame(height: 140)
                         if text.isEmpty {
                             Text(model.t("textPh")).font(.system(size: 15)).foregroundStyle(Theme.faint).padding(.horizontal, 15).padding(.vertical, 18).allowsHitTesting(false)
                         }
@@ -200,58 +192,31 @@ private struct PickCard: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .padding(.vertical, -14) // a 44 pt target without a taller row
                         }
                     }
-                    .frame(minHeight: 16)
-                    .padding(.horizontal, 2).padding(.top, 8).padding(.bottom, 16)
+                    .frame(height: 44)
+                    .padding(.horizontal, 2).padding(.top, 8).padding(.bottom, 8)
+                    Spacer(minLength: 0)
                     Button(model.t("sendText")) {
                         focused = false
                         model.dispatch(Ev.sendText)
                     }
-                    .buttonStyle(LumenButtonStyle(primary: true))
+                    .buttonStyle(LumenButtonStyle(primary: true, fill: true, height: 48))
                     .disabled(!send.canSendText)
                 }
 
-                if let err = send.error {
-                    Text(err).font(.system(size: 13)).foregroundStyle(Theme.red).padding(.top, 14)
-                }
-                Text(send.dropHint).font(.system(size: 12.5)).foregroundStyle(Theme.faint).multilineTextAlignment(.center).padding(.top, 18)
-                // photosensitivity warning, before any code plays
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.amber)
-                    Text(send.flashWarn).font(.system(size: 12.5)).foregroundStyle(Theme.warnText).multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .frame(maxWidth: 460, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.amber.opacity(0.06)))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.amber.opacity(0.22), lineWidth: 1))
-                .accessibilityElement(children: .combine)
-                .padding(.top, 14)
-                Button {
-                    model.dispatch(Ev.navigate(.receive))
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(model.t("goRecv"))
-                        Image(systemName: "arrow.right")
-                    }
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.muted)
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 18)
             }
-            .padding(.horizontal, 26)
-            .padding(.top, 34)
-            .padding(.bottom, 26)
-            .frame(maxWidth: 520)
-            .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Color.white.opacity(0.02)))
-            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Color.white.opacity(0.16), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
-            .padding(.horizontal, 20)
-            .padding(.top, 64)
-            .padding(.bottom, 24)
+            .frame(height: 320, alignment: .top)
+            if let err = send.error {
+                Text(err).font(.system(size: 13)).foregroundStyle(Theme.red).padding(.top, 14)
+            }
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button(model.t("doneEditing")) { focused = false }
+            }
+        }
     }
 }
 

@@ -18,8 +18,7 @@ describe('home page content', () => {
 	it('English and Chinese have the same structure, no empty text', () => {
 		expect(shape(LANDING.zh)).toEqual(shape(LANDING.en));
 		for (const lang of ['en', 'zh'] as const) {
-			const { head, ...rest } = LANDING[lang].speed; // head[0] is the table's empty corner
-			const all = [...texts({ ...LANDING[lang], speed: rest }), ...head.slice(1)];
+			const all = texts(LANDING[lang]);
 			for (const s of all) expect(s.trim()).not.toBe('');
 		}
 	});

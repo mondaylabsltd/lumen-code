@@ -208,11 +208,13 @@ private struct Hud: View {
                 .accessibilityAddTraits(details ? .isSelected : [])
             }
             .padding(.top, 4)
-            Text(recv.tip)
-                .font(.system(size: 13))
-                .foregroundStyle(recv.tipOk ? Theme.muted : Theme.amber)
-                .lineLimit(1)
-                .frame(minHeight: 18, alignment: .leading)
+            if details || !recv.tipOk {
+                Text(recv.tip)
+                    .font(.system(size: 13))
+                    .foregroundStyle(recv.tipOk ? Theme.muted : Theme.amber)
+                    .lineLimit(1)
+                    .frame(minHeight: 18, alignment: .leading)
+            }
             if details {
                 VStack(alignment: .leading, spacing: 8) {
                     FlowRow(spacing: 18, alignCenter: false) {
@@ -246,59 +248,34 @@ private struct StartPane: View {
     let recv: RecvVM
 
     var body: some View {
-        ZStack {
-            Theme.bg.ignoresSafeArea()
-            RadialGradient(colors: [Theme.pink.opacity(0.08), .clear], center: UnitPoint(x: 0.5, y: 0.3), startRadius: 0, endRadius: 420)
-                .ignoresSafeArea()
-            ScrollView {
-                VStack(spacing: 0) {
-                    IconTile(symbol: "viewfinder", tint: Theme.pink)
-                    Text(model.t("recvStartTitle")).font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text).padding(.top, 18).padding(.bottom, 8)
-                    Text(model.t("recvStartDesc")).font(.system(size: 15)).foregroundStyle(Theme.muted).multilineTextAlignment(.center).padding(.bottom, 22)
-                    if let err = recv.error {
-                        Text(err).font(.system(size: 13)).foregroundStyle(Theme.red).multilineTextAlignment(.center).padding(.bottom, 16)
-                    }
-                    FlowRow(spacing: 10) {
-                        if recv.canOpenSettings {
-                            // camera access denied: asking again does nothing, Settings is the way
-                            Button(model.t("openSettings")) { model.dispatch(Ev.openSettings) }
-                                .buttonStyle(LumenButtonStyle(primary: true))
-                        } else {
-                            Button {
-                                model.dispatch(Ev.openCamera)
-                            } label: {
-                                HStack(spacing: 8) {
-                                    if recv.cameraStarting { ProgressView().tint(Theme.ink).scaleEffect(0.8) }
-                                    Text(model.t("openCam"))
-                                }
-                            }
-                            .buttonStyle(LumenButtonStyle(primary: true))
-                            .disabled(recv.cameraStarting)
-                        }
-                        Button(model.t("fromImage")) { model.dispatch(Ev.pickImage) }.buttonStyle(LumenButtonStyle())
-                    }
-                    if let note = recv.note {
-                        Text(note).font(.system(size: 13)).foregroundStyle(Theme.amber).multilineTextAlignment(.center).padding(.top, 14)
-                    }
-                    Button {
-                        model.dispatch(Ev.navigate(.send))
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text(model.t("goSend"))
-                            Image(systemName: "arrow.right")
-                        }
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.muted)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.top, 26)
+        EntryPanel(symbol: "viewfinder", tint: Theme.pink, title: model.t("recvTitle"), switchLabel: model.t("goSend"),
+            onSwitch: { model.dispatch(Ev.navigate(.send)) }
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                if let error = recv.error {
+                    Text(error).font(.system(size: 14)).foregroundStyle(Theme.red)
                 }
-                .frame(maxWidth: 420)
-                .padding(24)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 90)
+                if let note = recv.note {
+                    Text(note).font(.system(size: 13)).foregroundStyle(Theme.amber)
+                }
+                Spacer(minLength: 0)
+                if recv.canOpenSettings {
+                    Button(model.t("openSettings")) { model.dispatch(Ev.openSettings) }
+                        .buttonStyle(LumenButtonStyle(primary: true, fill: true, height: 48))
+                } else {
+                    Button {
+                        model.dispatch(Ev.openCamera)
+                    } label: {
+                        HStack(spacing: 8) {
+                            if recv.cameraStarting { ProgressView().tint(Theme.ink).scaleEffect(0.8) }
+                            Text(model.t("openCam"))
+                        }
+                    }
+                    .buttonStyle(LumenButtonStyle(primary: true, fill: true, height: 48))
+                    .disabled(recv.cameraStarting)
+                }
             }
-            .scrollIndicators(.hidden)
+            .frame(height: 320)
         }
     }
 }

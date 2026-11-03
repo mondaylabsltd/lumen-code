@@ -123,38 +123,20 @@ fn top_bar(root: &Root) -> AnyElement {
 fn pick(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) -> AnyElement {
     let s = root.view.send.clone();
     let rt = root.rt.clone();
-    let mut card = div()
-        .w(px(520.))
-        .max_w_full()
-        .px(px(26.))
-        .pt(px(34.))
-        .pb(px(26.))
-        .rounded(px(24.))
-        .border_2()
-        .border_dashed()
-        .border_color(white(0.16))
-        .bg(white(0.02))
-        .flex()
-        .flex_col()
-        .items_center()
-        .text_center();
+    let mut card = entry_panel("upload", CYAN, root.t("sendTitle"));
     let r1 = rt.clone();
-    card = card.child(
-        div().mb(px(22.)).child(segmented(
+    let mut body = div().w_full().h(px(320.)).flex_none().flex().flex_col().child(
+        div().mb(px(24.)).child(segmented_fill(
             "tabs",
             vec![(SourceTab::File, root.t("tabFile").into()), (SourceTab::Text, root.t("tabText").into())],
             s.source_tab,
-            84.,
             move |tab, _, _| r1.dispatch(Event::SourceTab { tab }),
         )),
     );
     if s.source_tab == SourceTab::File {
         let r2 = rt.clone();
-        card = card
-            .child(icon_tile("upload", CYAN, 64.))
-            .child(div().mt(px(16.)).mb(px(6.)).text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(root.t("dropTitle")))
-            .child(div().mb(px(22.)).text_color(c(MUTED)).child(s.drop_desc.clone()))
-            .child(button("choose", root.t("choose"), true, true, move |_, _| r2.dispatch(Event::PickFile)));
+        body = body
+            .child(button("choose", root.t("choose"), true, true, move |_, _| r2.dispatch(Event::PickFile)).w_full().h(px(48.)).flex_none().mt_auto());
     } else {
         let placeholder: SharedString = root.t("textPh").into();
         let r3 = rt.clone();
@@ -165,63 +147,29 @@ fn pick(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) -> AnyElem
             }
         });
         let r4 = rt.clone();
-        card = card
+        body = body
             .child(root.text_area.clone())
             .child(
                 div()
                     .w_full()
                     .flex()
                     .justify_between()
-                    .mt(px(8.))
-                    .mb(px(16.))
+                    .h(px(60.)).flex_none().items_center()
                     .px(px(2.))
                     .text_size(px(12.))
                     .text_color(c(FAINT))
-                    .child(div().font_family(MONO).child(s.text_meta.clone()))
-                    .child(root.t("textKbd")),
+                    .child(div().font_family(MONO).child(s.text_meta.clone())),
             )
-            .child(button("send-text", root.t("sendText"), true, s.can_send_text, move |_, _| r4.dispatch(Event::SendText)));
+            .child(button("send-text", root.t("sendText"), true, s.can_send_text, move |_, _| r4.dispatch(Event::SendText)).w_full().h(px(48.)).flex_none().mt_auto());
     }
+    card = card.child(body);
     if let Some(err) = &s.error {
         card = card.child(div().mt(px(14.)).text_size(px(13.)).text_color(c(RED)).child(err.clone()));
     }
     let r5 = rt.clone();
-    card = card
-        .child(div().mt(px(18.)).text_size(px(12.5)).text_color(c(FAINT)).child(s.drop_hint.clone()))
-        // photosensitivity warning, before any code plays
-        .child(
-            div()
-                .mt(px(14.))
-                .max_w(px(460.))
-                .flex()
-                .items_start()
-                .gap(px(8.))
-                .px(px(12.))
-                .py(px(10.))
-                .rounded(px(12.))
-                .bg(rgba(0xffd60a10))
-                .border_1()
-                .border_color(rgba(0xffd60a38))
-                .child(div().mt(px(1.)).child(icon("warn", 16., c(AMBER))))
-                .child(div().flex_1().min_w(px(0.)).text_left().text_size(px(12.5)).line_height(px(18.)).text_color(c(0xe8d48a)).child(s.flash_warn.clone())),
-        )
-        .child(
-            div()
-                .id("go-recv")
-                .mt(px(18.))
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .text_size(px(13.))
-                .text_color(c(MUTED))
-                .cursor_pointer()
-                .hover(|st| st.text_color(c(TEXT)))
-                .child(root.t("goRecv"))
-                .child(icon("arrow", 16., c(MUTED)))
-                .on_click(move |_, _, _| r5.dispatch(Event::Navigate { screen: Screen::Receive })),
-        );
+    card = card.child(entry_switch("go-recv", root.t("goRecv"), move |_, _| r5.dispatch(Event::Navigate { screen: Screen::Receive })));
     let _ = window;
-    div().id("pick").size_full().overflow_y_scroll().flex().items_center().justify_center().p(px(20.)).pt(px(80.)).child(card).into_any_element()
+    entry_stage(card, f32::from(window.viewport_size().height)).into_any_element()
 }
 
 /// The code as rounded quads, every edge on a device pixel (the reference sender's look:

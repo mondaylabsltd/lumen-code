@@ -14,10 +14,10 @@ test.beforeEach(async ({ context }) => {
 });
 
 const pages = [
-	['/', 'Lumen Code', 'Send files from'],
+	['/', 'Lumen Code', 'Send files'],
 	['/send', 'Send a file — Lumen Code', 'Choose file'],
 	['/recv', 'Receive a file — Lumen Code', 'Open camera'],
-	['/zh', 'Lumen Code：用屏幕和相机传文件', '用屏幕和相机'],
+	['/zh', 'Lumen Code：不联网，也能传文件', '不联网，'],
 	['/zh/send', '发送文件 — Lumen Code', '选择文件'],
 	['/zh/recv', '接收文件 — Lumen Code', '打开相机'],
 	['/privacy', 'Privacy Policy — Lumen Code', 'never leave your devices'],
@@ -49,9 +49,8 @@ for (const [url, title, text] of pages) {
 	});
 }
 
-test('home page: pricing, the store apps not yet published, the receiver screenshot', async ({
-	page,
-	request
+test('home page: pricing, the store apps not yet published, the transfer illustration', async ({
+	page
 }) => {
 	for (const [url, soon] of [
 		['/', 'Coming soon'],
@@ -62,8 +61,7 @@ test('home page: pricing, the store apps not yet published, the receiver screens
 		await expect(pricing.locator('.plan')).toHaveCount(2);
 		await expect(pricing.locator('.plan.featured .price')).toContainText('US$2.99');
 		await expect(pricing.locator('.store')).toHaveText([soon]);
-		const shot = await page.locator('img.phone').getAttribute('src');
-		expect((await request.get(shot!)).status()).toBe(200);
+		await expect(page.locator('.hero-visual svg[role="img"]')).toBeVisible();
 	}
 });
 
@@ -184,20 +182,13 @@ for (const [engine, lang] of [
 	});
 }
 
-test('home page draws one still frame with the protocol library', async ({ page }) => {
+test('home page explains transfers with a static illustration', async ({ page }) => {
 	const errors = collectErrors(page);
 	await page.goto('/');
-	await expect
-		.poll(() =>
-			page.evaluate(() => {
-				const c = document.getElementById('sample') as HTMLCanvasElement;
-				const px = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
-				let yellow = 0;
-				for (let i = 0; i < px.length; i += 4) if (px[i] > 200 && px[i + 2] < 60) yellow++; // C4 cells
-				return c.width > 300 && yellow > 1000;
-			})
-		)
-		.toBe(true);
+	await expect(page.getByRole('img', { name: /Transfer illustration:/ })).toBeVisible();
+	await expect(
+		page.locator('.hero-visual canvas, .hero-visual img, .hero-visual animate')
+	).toHaveCount(0);
 	expect(errors).toEqual([]);
 });
 
@@ -350,7 +341,7 @@ test.describe('languages', () => {
 		await page.goto('/');
 		await page.click('#lang');
 		await expect(page).toHaveURL(/\/zh$/);
-		await expect(page.locator('h1')).toContainText('用屏幕和相机');
+		await expect(page.locator('h1')).toContainText('不联网，');
 		await page.click('#lang');
 		await expect(page).toHaveURL(/:4173\/$/);
 	});
@@ -373,3 +364,39 @@ test.describe('an English browser with no saved choice', () => {
 		await expect(page).toHaveURL(/\/zh\/recv$/);
 	});
 });
+
+// Changing source or direction must not move or resize the main action.
+for (const viewport of [
+	{ width: 390, height: 844 },
+	{ width: 1280, height: 800 }
+]) {
+	test(`entry panels and actions stay aligned at ${viewport.width}px`, async ({ page }) => {
+		await page.setViewportSize(viewport);
+		for (const prefix of ['', '/zh']) {
+			await page.goto(`${prefix}/send`);
+			await page.locator('#srcTabs [data-v="file"]').click();
+			const panel = page.locator('.entry-card');
+			const file = page.locator('#pick');
+			await expect(file).toBeVisible();
+			const before = await panel.boundingBox();
+			const action = await file.boundingBox();
+			expect(before?.height).toBe(520);
+			expect(action?.height).toBe(48);
+			await page.locator('#srcTabs [data-v="text"]').click();
+			await expect(page.locator('#paneText')).toBeVisible();
+			expect(await panel.boundingBox()).toEqual(before);
+			expect(await page.locator('#textSend').boundingBox()).toEqual(action);
+			await expect(page.locator('#textInput')).not.toBeFocused();
+			await page.locator('#textInput').fill('One line\nAnother line');
+			expect(await page.locator('#textSend').boundingBox()).toEqual(action);
+			await page.locator('.switch-page').click();
+			await expect(page.locator('#startBtn')).toBeVisible();
+			expect(await page.locator('.entry-card').boundingBox()).toEqual(before);
+			expect(await page.locator('#startBtn').boundingBox()).toEqual(action);
+			await expect(page.locator('#fileBtn')).toHaveCount(0);
+			expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+				true
+			);
+		}
+	});
+}

@@ -1,7 +1,6 @@
 //! The receiver (the web's recv.html): start screen, webcam with the dashboard, result.
 
 use crate::app::Root;
-use crate::home::gradient_text;
 use crate::theme::*;
 use gpui::{
     canvas, div, img, point, prelude::*, px, AnyElement, Bounds, Context, FontWeight, HighlightStyle, ObjectFit, PathBuilder, Pixels,
@@ -25,7 +24,7 @@ pub fn render(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) -> i
         }
     }
     match r.phase {
-        RecvPhase::Start => stage = stage.child(start(root)),
+        RecvPhase::Start => stage = stage.child(start(root, window)),
         RecvPhase::Scanning => stage = stage.child(hud(root, window, cx)),
         RecvPhase::Done => {
             if let Some(d) = r.done.clone() {
@@ -99,60 +98,25 @@ fn paint_outline(b: Bounds<Pixels>, o: &Overlay, iw: f32, ih: f32, window: &mut 
     }
 }
 
-fn start(root: &Root) -> AnyElement {
+fn start(root: &Root, window: &Window) -> AnyElement {
     let r = &root.view.recv;
-    let (r1, r2, r3, r4) = (root.rt.clone(), root.rt.clone(), root.rt.clone(), root.rt.clone());
-    let mut inner = div()
-        .max_w(px(420.))
-        .flex()
-        .flex_col()
-        .items_center()
-        .text_center()
-        .child(icon_tile("scan", PINK, 64.))
-        .child(div().mt(px(18.)).mb(px(8.)).text_size(px(24.)).font_weight(FontWeight::BOLD).child(root.t("recvStartTitle")))
-        .child(div().mb(px(22.)).text_color(c(MUTED)).child(root.t("recvStartDesc")))
-        .child(
-            div()
-                .flex()
-                .gap(px(10.))
-                .child(button("open-cam", root.t("openCam"), true, !r.camera_starting, move |_, _| r1.dispatch(Event::OpenCamera)))
-                .child(button("from-image", root.t("fromImage"), false, true, move |_, _| r2.dispatch(Event::PickImage))),
-        );
+    let (r1, r3, r4) = (root.rt.clone(), root.rt.clone(), root.rt.clone());
+    let mut inner = entry_panel("scan", PINK, root.t("recvTitle"));
+    let mut body = div().w_full().h(px(320.)).flex_none().flex().flex_col();
     if let Some(e) = &r.error {
-        inner = inner.child(div().mt(px(14.)).text_size(px(13.)).text_color(c(RED)).child(e.clone()));
-        if r.can_open_settings {
-            inner = inner.child(div().mt(px(10.)).child(button("settings", root.t("openSettings"), false, true, move |_, _| r3.dispatch(Event::OpenSettings))));
-        }
+        body = body.child(div().text_size(px(13.)).text_color(c(RED)).child(e.clone()));
     }
     if let Some(n) = &r.note {
-        inner = inner.child(div().mt(px(14.)).text_size(px(13.)).text_color(c(AMBER)).child(n.clone()));
+        body = body.child(div().mt(px(14.)).text_size(px(13.)).text_color(c(AMBER)).child(n.clone()));
     }
-    inner = inner.child(
-        div()
-            .id("go-send")
-            .mt(px(26.))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .text_size(px(13.))
-            .text_color(c(MUTED))
-            .cursor_pointer()
-            .hover(|s| s.text_color(c(TEXT)))
-            .child(root.t("goSend"))
-            .child(icon("arrow", 16., c(MUTED)))
-            .on_click(move |_, _, _| r4.dispatch(Event::Navigate { screen: Screen::Send })),
-    );
-    let _ = gradient_text;
-    div()
-        .absolute()
-        .size_full()
-        .bg(c(BG))
-        .flex()
-        .items_center()
-        .justify_center()
-        .p(px(24.))
-        .child(inner)
-        .into_any_element()
+    if r.can_open_settings {
+        body = body.child(button("settings", root.t("openSettings"), true, true, move |_, _| r3.dispatch(Event::OpenSettings)).w_full().h(px(48.)).flex_none().mt_auto());
+    } else {
+        body = body.child(button("open-cam", root.t("openCam"), true, !r.camera_starting, move |_, _| r1.dispatch(Event::OpenCamera)).w_full().h(px(48.)).flex_none().mt_auto());
+    }
+    inner = inner.child(body);
+    inner = inner.child(entry_switch("go-send", root.t("goSend"), move |_, _| r4.dispatch(Event::Navigate { screen: Screen::Send })));
+    entry_stage(inner, f32::from(window.viewport_size().height)).absolute().bg(c(BG)).into_any_element()
 }
 
 /// Framing guides: four corners marking where to put the code, until one is found.
@@ -242,7 +206,9 @@ fn hud(root: &Root, window: &Window, cx: &mut Context<Root>) -> AnyElement {
                 .child(div().min_w_0().text_size(px(13.5)).whitespace_nowrap().overflow_hidden().text_ellipsis().child(r.line.clone()))
                 .child(details),
         )
-        .child(div().min_h(px(19.5)).text_size(px(13.)).line_height(px(19.5)).text_color(c(if r.tip_ok { MUTED } else { AMBER })).child(r.tip.clone()));
+        .when(open || !r.tip_ok, |panel| {
+            panel.child(div().text_size(px(13.)).line_height(px(19.5)).text_color(c(if r.tip_ok { MUTED } else { AMBER })).child(r.tip.clone()))
+        });
     if open {
         let mut metrics = div().flex().flex_wrap().gap_x(px(18.)).gap_y(px(6.)).text_size(px(12.5)).text_color(c(MUTED));
         for m in &r.metrics {

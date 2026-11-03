@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { t as tr, path, type Key } from '#lib/i18n';
 	import { LANDING, STORES } from '#lib/landing';
@@ -7,7 +6,7 @@
 	import { BUILD, REPO } from '#lib/build';
 	import Mark from '#lib/ui/Mark.svelte';
 	import Seo from '#lib/ui/Seo.svelte';
-	import TransferScene from '#lib/ui/TransferScene.svelte';
+	import HeroScene from '#lib/ui/HeroScene.svelte';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -53,30 +52,6 @@
 		}
 		goto(path(next, ''));
 	}
-
-	// One real frame, drawn by the protocol library. It stays still: no flashing on this page.
-	let canvas = $state<HTMLCanvasElement>();
-	onMount(async () => {
-		const { Sender, Renderer, crc32 } = await import('#lib/protocol');
-		const text = new TextEncoder().encode('Lumen Code: files as moving light. '.repeat(40));
-		const meta = {
-			name: 'hello.txt',
-			fileSize: text.length,
-			crc: crc32(text),
-			flags: 0,
-			payloadLength: text.length
-		};
-		const tx = new Sender({ payload: text, meta }, { mode: 1, ecc: 1, X: 86, Y: 54, tid: 0x4c43 });
-		tx.seq = 7;
-		const { cells, layout } = tx.nextFrame();
-		const r = new Renderer(layout, 1, 4);
-		canvas!.width = r.width;
-		canvas!.height = r.height;
-		const g = canvas!.getContext('2d')!;
-		const img = g.createImageData(r.width, r.height);
-		r.draw(cells, new Uint32Array(img.data.buffer));
-		g.putImageData(img, 0, 0);
-	});
 
 	const appIcons = [
 		'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM3.5 12h17M12 3c2.4 2.7 3.6 5.7 3.6 9s-1.2 6.3-3.6 9c-2.4-2.7-3.6-5.7-3.6-9S9.6 5.7 12 3z',
@@ -131,7 +106,6 @@
 			<a class="brand" href={path(lang, '')}><Mark /><span>Lumen Code</span></a>
 			<div class="links">
 				<a href="#apps">{c.nav.apps}</a>
-				<a href="#how">{c.nav.how}</a>
 				<a href="#speed">{c.nav.speed}</a>
 				<a href="#pricing">{c.nav.pricing}</a>
 				<a class="gh" href={REPO} title={t('ghTitle')} aria-label={t('ghTitle')} rel="external">
@@ -157,20 +131,10 @@
 					<a class="button tonal" href={path(lang, 'recv')}>{c.hero.recv}</a>
 				</div>
 			</div>
-			<div class="hero-visual">
-				<figure class="screen">
-					<canvas id="sample" width="360" height="232" aria-hidden="true" bind:this={canvas}
-					></canvas>
-					<figcaption>{t('sampleCap')}</figcaption>
-				</figure>
-				<img
-					class="phone"
-					src="/screens/recv-{lang}.jpg"
-					alt={zh ? '手机正在接收文件' : 'A phone receiving a file'}
-					width="585"
-					height="1266"
-				/>
-			</div>
+			<figure class="hero-visual">
+				<HeroScene {lang} />
+				<figcaption>{zh ? '传输示意' : 'Transfer illustration'}</figcaption>
+			</figure>
 		</section>
 
 		<section id="apps" class="section wrap">
@@ -195,34 +159,19 @@
 			</ul>
 		</section>
 
-		<section id="how" class="section wrap">
-			<h2>{c.how.title}</h2>
-			<ol class="flow">
-				{#each c.how.flow as what, i (i)}
-					<li>
-						<TransferScene stage={i} />
-						<h3>{what}</h3>
-					</li>
-				{/each}
-			</ol>
-			<p class="how-note">{c.how.note}</p>
-		</section>
-
 		<section id="speed" class="section wrap">
 			<h2>{c.speed.title}</h2>
 			<div class="card table-card">
 				<table>
 					<thead>
 						<tr>
-							{#each c.speed.head as cell, i (i)}<th scope="col" class:ours={i >= 2}>{cell}</th
-								>{/each}
+							{#each c.speed.head as cell (cell)}<th scope="col">{cell}</th>{/each}
 						</tr>
 					</thead>
 					<tbody>
 						{#each c.speed.rows as row (row[0])}
 							<tr>
-								<th scope="row">{row[0]}</th><td>{row[1]}</td><td class="ours">{row[2]}</td><td
-									class="ours">{row[3]}</td
+								<th scope="row">{row[0]}</th><td>{row[1]}</td><td class="measured-rate">{row[2]}</td
 								>
 							</tr>
 						{/each}
@@ -232,7 +181,7 @@
 			<p class="caption">
 				{c.speed.note}
 				<a
-					href={`${REPO}/blob/main/docs/${zh ? 'guide/04-performance.zh-CN.md' : 'guide/04-performance.md'}`}
+					href={`${REPO}/blob/main/docs/${zh ? 'guide/04-performance.zh-CN.md#42-设备实测' : 'guide/04-performance.md#42-real-device-results'}`}
 					rel="external">{c.speed.more} →</a
 				>
 			</p>
@@ -489,43 +438,14 @@
 		background: rgba(255, 255, 255, 0.1);
 	}
 	.hero-visual {
-		position: relative;
-		padding: 0 84px 96px 0;
-	}
-	.screen {
 		margin: 0;
-		padding: 14px 14px 0;
-		border-radius: 18px;
-		background: #05070a;
-		border: 1px solid var(--line-2);
-		box-shadow:
-			0 30px 80px rgba(0, 0, 0, 0.55),
-			0 0 120px rgba(34, 216, 255, 0.07);
-	}
-	.screen canvas {
-		display: block;
 		width: 100%;
-		height: auto;
-		image-rendering: pixelated;
-		border-radius: 6px;
 	}
-	.screen figcaption {
-		padding: 10px 2px 12px;
-		color: var(--faint);
-		font-size: 12.5px;
-		line-height: 1.5;
-		max-width: 62%;
-	}
-	.phone {
-		position: absolute;
-		right: 0;
-		bottom: 0;
-		width: 34%;
-		height: auto;
-		border-radius: 26px;
-		border: 5px solid #1b2130;
-		box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
-		background: #000;
+	.hero-visual figcaption {
+		margin-top: 4px;
+		color: var(--muted);
+		font-size: 13px;
+		text-align: center;
 	}
 	@media (max-width: 900px) {
 		.hero {
@@ -535,19 +455,7 @@
 		}
 		.hero-visual {
 			max-width: 560px;
-		}
-	}
-	@media (max-width: 480px) {
-		.hero-visual {
-			padding: 0 36px 90px 0;
-		}
-		.phone {
-			width: 42%;
-			border-width: 4px;
-			border-radius: 20px;
-		}
-		.screen figcaption {
-			max-width: 52%;
+			margin-inline: auto;
 		}
 	}
 
@@ -580,59 +488,6 @@
 		font-size: 18px;
 	}
 
-	/* how it works: the same file becomes light, then becomes a file again */
-	.flow {
-		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 40px;
-		list-style: none;
-		padding: 28px 32px 32px;
-		margin: 32px 0 0;
-		border: 1px solid var(--line);
-		border-radius: 20px;
-		background: var(--surface);
-	}
-	.flow li {
-		position: relative;
-		min-width: 0;
-	}
-	.flow li + li::before {
-		content: '→';
-		position: absolute;
-		left: -32px;
-		top: 64px;
-		color: var(--faint);
-		font-size: 24px;
-	}
-	.flow h3 {
-		margin-top: 20px;
-		font-size: 17px;
-		font-weight: 600;
-		line-height: 1.4;
-		text-align: center;
-	}
-	.how-note {
-		margin-top: 20px;
-		color: var(--muted);
-		font-size: 15px;
-		text-align: center;
-	}
-	@media (max-width: 760px) {
-		.flow {
-			grid-template-columns: minmax(0, 1fr);
-			gap: 48px;
-			padding: 24px;
-		}
-		.flow li + li::before {
-			content: '↓';
-			left: calc(50% - 8px);
-			top: -42px;
-		}
-		.flow h3 {
-			margin-top: 12px;
-		}
-	}
-
 	/* speed */
 	.table-card {
 		margin-top: 36px;
@@ -648,7 +503,7 @@
 		text-align: left;
 		padding: 14px 20px;
 		border-bottom: 1px solid var(--line);
-		vertical-align: top;
+		vertical-align: middle;
 	}
 	thead th {
 		color: var(--faint);
@@ -665,18 +520,22 @@
 	td {
 		color: var(--muted);
 	}
-	.ours {
-		color: var(--text);
-		background: rgba(34, 216, 255, 0.05);
-	}
-	thead .ours {
+	.measured-rate {
 		color: var(--cyan);
+		font-size: clamp(20px, 2.8vw, 32px);
+		font-weight: 650;
+		white-space: nowrap;
+		font-variant-numeric: tabular-nums;
 	}
 	@media (max-width: 560px) {
 		th,
 		td {
-			padding: 12px 12px;
-			font-size: 14.5px;
+			padding: 12px 10px;
+			font-size: 13px;
+		}
+		tbody th,
+		tbody td:not(.measured-rate) {
+			white-space: nowrap;
 		}
 	}
 

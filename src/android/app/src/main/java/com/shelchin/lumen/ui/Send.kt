@@ -23,6 +23,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
@@ -55,6 +58,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -426,43 +430,28 @@ private fun PickCard(model: AppModel, s: SendVM) {
     val text = s.text
     var focused by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val clipboard = LocalClipboardManager.current
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 64.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+    EntryPane(Icons.upload, Lumen.cyan, model.t("sendTitle"), model.t("goRecv"),
+        onSwitch = { model.dispatch(Ev.navigate("receive")) },
     ) {
-        Column(
-            Modifier
-                .widthIn(max = 520.dp)
-                .fillMaxWidth()
-                .drawBehind {
-                    val r = 24.dp.toPx()
-                    drawRoundRect(Color.White.copy(alpha = 0.02f), cornerRadius = CornerRadius(r))
-                    drawRoundRect(
-                        Color.White.copy(alpha = 0.16f), cornerRadius = CornerRadius(r),
-                        style = Stroke(width = 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 5.dp.toPx()))),
-                    )
-                }
-                .padding(start = 26.dp, end = 26.dp, top = 34.dp, bottom = 26.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Segmented(listOf("file" to model.t("tabFile"), "text" to model.t("tabText")), s.sourceTab, minWidth = 84.dp) {
+        Column(Modifier.fillMaxWidth().height(320.dp)) {
+            Segmented(listOf("file" to model.t("tabFile"), "text" to model.t("tabText")), s.sourceTab, modifier = Modifier.fillMaxWidth(), fill = true, itemHeight = 38.dp) {
+                focus.clearFocus()
+                keyboard?.hide()
                 model.dispatch(Ev.sourceTab(it))
                 model.haptics.play("selection")
             }
-            Spacer(Modifier.padding(11.dp))
+            Spacer(Modifier.height(24.dp))
             if (s.sourceTab == "file") {
-                IconTile(Icons.upload, Lumen.cyan)
-                Label(model.t("dropTitle"), size = 22.sp, weight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
-                Text(s.dropDesc, color = Lumen.muted, fontSize = 15.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp, bottom = 22.dp))
-                LumenButton(model.t("choose"), primary = true) { model.dispatch(Ev.pickFile) }
+                Spacer(Modifier.weight(1f))
+                LumenButton(model.t("choose"), primary = true, modifier = Modifier.fillMaxWidth().height(48.dp)) { model.dispatch(Ev.pickFile) }
             } else {
                 val shape = RoundedCornerShape(14.dp)
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 190.dp, max = 320.dp)
+                        .height(140.dp)
                         .background(Color.Black.copy(alpha = 0.3f), shape)
                         .border(1.dp, if (focused) Lumen.cyan.copy(alpha = 0.55f) else Lumen.line2, shape)
                         .padding(14.dp),
@@ -470,13 +459,18 @@ private fun PickCard(model: AppModel, s: SendVM) {
                     if (text.isEmpty()) Label(model.t("textPh"), size = 15.sp, color = Lumen.faint)
                     BasicTextField(
                         value = text,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            focus.clearFocus()
+                            keyboard?.hide()
+                        }),
                         onValueChange = { model.dispatchNow(Ev.textChanged(it)) },
                         textStyle = TextStyle(color = Lumen.text, fontSize = 15.sp, lineHeight = 22.sp),
                         cursorBrush = SolidColor(Lumen.cyan),
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 162.dp).onFocusChanged { focused = it.isFocused },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 112.dp).onFocusChanged { focused = it.isFocused },
                     )
                 }
-                Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp, start = 2.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp, start = 2.dp, end = 2.dp).height(44.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(s.textMeta, style = mono(12.sp), color = Lumen.faint)
                     Spacer(Modifier.weight(1f))
                     if (text.isEmpty()) {
@@ -489,37 +483,18 @@ private fun PickCard(model: AppModel, s: SendVM) {
                         })
                     }
                 }
-                LumenButton(model.t("sendText"), primary = true, enabled = s.canSendText) {
+                Spacer(Modifier.weight(1f))
+                LumenButton(model.t("sendText"), primary = true, enabled = s.canSendText, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                     focus.clearFocus()
                     model.dispatch(Ev.sendText)
                 }
             }
-            (model.sendNote ?: s.error)?.let {
-                Text(
-                    it, color = Lumen.red, fontSize = 13.sp, textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 14.dp).semantics { liveRegion = LiveRegionMode.Polite },
-                )
-            }
-            Text(s.dropHint, color = Lumen.faint, fontSize = 12.5.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 18.dp))
-            // photosensitivity warning, before any code plays
-            Row(
-                Modifier.padding(top = 14.dp).widthIn(max = 460.dp)
-                    .background(Lumen.amber.copy(alpha = 0.06f), RoundedCornerShape(12.dp))
-                    .border(1.dp, Lumen.amber.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                androidx.compose.material3.Icon(Icons.warn, null, tint = Lumen.amber, modifier = Modifier.padding(top = 1.dp).width(16.dp))
-                Text(s.flashWarn, color = Lumen.warnText, fontSize = 12.5.sp, lineHeight = 18.sp)
-            }
-            Row(
-                Modifier.padding(top = 18.dp).clickable { model.dispatch(Ev.navigate("receive")) },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Label(model.t("goRecv"), size = 13.sp, color = Lumen.muted, weight = FontWeight.Medium)
-                androidx.compose.material3.Icon(Icons.arrowRight, null, tint = Lumen.muted, modifier = Modifier.width(16.dp))
-            }
+        }
+        (model.sendNote ?: s.error)?.let {
+            Text(
+                it, color = Lumen.red, fontSize = 13.sp, textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 14.dp).semantics { liveRegion = LiveRegionMode.Polite },
+            )
         }
     }
 }

@@ -372,50 +372,52 @@
 		</div>
 	</div>
 
-	<div class="start" class:hidden={rx && rx.phase !== 'start'} id="start">
-		<div class="inner">
-			<div class="drop-art">
-				<svg
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="1.8"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					><path
-						d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"
-					/><circle cx="12" cy="12" r="3.2" /></svg
+	<div class="start entry-stage" class:hidden={rx && rx.phase !== 'start'} id="start">
+		<div class="entry-stack">
+			<div class="inner entry-card">
+				<header class="entry-heading">
+					<div class="drop-art">
+						<svg
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.8"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							><path
+								d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"
+							/><circle cx="12" cy="12" r="3.2" /></svg
+						>
+					</div>
+					<h1>{t('receive')}</h1>
+				</header>
+				<div class="entry-body">
+					<div class="entry-flow">
+						<div class="err" id="startErr">{rx?.startErr ?? ''}</div>
+						<button class="btn primary entry-action" id="startBtn" onclick={() => rx?.openCamera()}
+							>{t('openCam')}</button
+						>
+					</div>
+				</div>
+				<input
+					type="file"
+					id="mediaFile"
+					accept="image/*,video/*"
+					hidden
+					bind:this={mediaInput}
+					onchange={onMedia}
+				/>
+				<a class="switch-page" href={path(lang, 'send')}
+					><span>{t('goSend')}</span><svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg
+					></a
 				>
 			</div>
-			<h1>{t('recvStartTitle')}</h1>
-			<p>{t('recvStartDesc')}</p>
-			<div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap">
-				<button class="btn primary" id="startBtn" onclick={() => rx?.openCamera()}
-					>{t('openCam')}</button
-				>
-				<button class="btn" id="fileBtn" onclick={() => mediaInput?.click()}
-					>{t('fromImage')}</button
-				>
-			</div>
-			<input
-				type="file"
-				id="mediaFile"
-				accept="image/*,video/*"
-				hidden
-				bind:this={mediaInput}
-				onchange={onMedia}
-			/>
-			<div class="err" id="startErr">{rx?.startErr ?? ''}</div>
-			<a class="switch-page" href={path(lang, 'send')}
-				><span>{t('goSend')}</span><svg
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg
-				></a
-			>
 			<BuildLink label={t('buildLabel')} />
 		</div>
 	</div>

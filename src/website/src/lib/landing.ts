@@ -1,6 +1,6 @@
 // Everything the home page says, in English and Chinese:
-// every number states its conditions and comes from the protocol (docs/PROTOCOL.md, incl.
-// Appendix C), the measurements (docs/guide/04-performance.md) or the code.
+// Device transfer rates are field results reported by the maintainer, not protocol-capacity
+// estimates or competitor benchmarks. Their scope is recorded in docs/guide/04-performance.md.
 import type { Lang } from './i18n';
 
 /** One price worldwide for the iPhone and Android apps, paid once; each store converts it. */
@@ -20,17 +20,16 @@ interface Plan {
 }
 
 export interface Landing {
-	nav: { apps: string; how: string; speed: string; pricing: string };
+	nav: { apps: string; speed: string; pricing: string };
 	hero: {
 		title: [string, string];
 		send: string;
 		recv: string;
 	};
-	how: { title: string; flow: string[]; note: string };
 	speed: {
 		title: string;
-		head: [string, string, string, string];
-		rows: [string, string, string, string][];
+		head: [string, string, string];
+		rows: [string, string, string][];
 		note: string;
 		more: string;
 	};
@@ -45,31 +44,23 @@ export interface Landing {
 const en: Landing = {
 	nav: {
 		apps: 'Apps',
-		how: 'How it works',
 		speed: 'Performance',
 		pricing: 'Pricing'
 	},
 	hero: {
-		title: ['Send files from', 'a screen to a camera'],
+		title: ['Send files', 'without internet.'],
 		send: 'Send a file',
 		recv: 'Receive'
 	},
-	how: {
-		title: 'How it works',
-		flow: ['File to pictures', 'Camera reads', 'File restored'],
-		note: 'Missed a picture? Keep scanning.'
-	},
 	speed: {
-		title: 'Performance',
-		head: ['', 'Animated QR v25-L', 'Phone screen (example)', '13″ laptop (example)'],
+		title: 'Real-device speeds',
+		head: ['Sending device', 'Receiving device', 'Measured speed'],
 		rows: [
-			['Grid (cells)', '117 × 117', '83 × 147', '143 × 254'],
-			['Bits per cell', '1', '2', '2 / 3'],
-			['Payload per frame', '1.24 KB', '2.2 KB', '6.9 / 10.3 KB'],
-			['Raw rate at 12 fps', '15 KB/s', '27 KB/s', '82 / 124 KB/s']
+			['Computer', 'iPhone app', '≈ 0.5 MB/s'],
+			['Android app', 'iPhone app', '≈ 100 KB/s']
 		],
-		note: 'The sender plays 4–60 fps (12 by default). Measured end to end on real phones, Android app sending to iPhone app: 96 KB/s. What a receiver achieves depends on its camera; the receive screen shows the live rate and what limits it.',
-		more: 'Methodology and measurements'
+		note: 'Higher playback frame rates can increase speed on capable devices. Results vary with the devices and capture conditions.',
+		more: 'About these results'
 	},
 	apps: {
 		title: 'Apps',
@@ -134,28 +125,21 @@ const en: Landing = {
 };
 
 const zh: Landing = {
-	nav: { apps: '应用', how: '原理', speed: '性能', pricing: '定价' },
+	nav: { apps: '应用', speed: '性能', pricing: '定价' },
 	hero: {
-		title: ['用屏幕和相机', '传文件'],
+		title: ['不联网，', '也能传文件。'],
 		send: '发送文件',
 		recv: '接收'
 	},
-	how: {
-		title: '原理',
-		flow: ['文件变画面', '相机读取', '还原文件'],
-		note: '漏拍几张，继续扫就好。'
-	},
 	speed: {
-		title: '性能',
-		head: ['', '动态二维码 v25-L', '手机屏幕（示例）', '13 英寸笔记本（示例）'],
+		title: '实测速度',
+		head: ['发送设备', '接收设备', '实测速度'],
 		rows: [
-			['网格（格）', '117 × 117', '83 × 147', '143 × 254'],
-			['每格比特', '1', '2', '2 / 3'],
-			['每帧有效数据', '1.24 KB', '2.2 KB', '6.9 / 10.3 KB'],
-			['12 fps 原始速率', '15 KB/s', '27 KB/s', '82 / 124 KB/s']
+			['电脑', 'iPhone 应用', '≈ 0.5 MB/s'],
+			['Android 应用', 'iPhone 应用', '≈ 100 KB/s']
 		],
-		note: '发送端 4–60 fps（默认 12）。真机端到端实测：Android 应用发送、iPhone 应用接收，96 KB/s。接收端实际能到多少取决于相机，接收界面会实时显示速率和限速环节。',
-		more: '测量方法与数据'
+		note: '合适的设备可调高播放帧率提速，实际速度随设备与拍摄条件变化。',
+		more: '测试说明'
 	},
 	apps: {
 		title: '应用',

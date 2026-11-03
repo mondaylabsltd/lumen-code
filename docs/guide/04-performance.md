@@ -20,20 +20,18 @@ actual speed = FPS × codewords per frame × payload per codeword T
 
 Every speed-up technique raises one of these terms.
 
-## 4.2 Comparison with animated QR codes
+## 4.2 Real-device results
 
-The baseline is a common animated QR setup: QR version 25 at ECC level L (1 273 bytes per frame), looped at 12 FPS.
+These device-test results were reported by the maintainer on 2026-11-03. They are not theoretical rates calculated from frame capacity, and no other animated-code protocol was benchmarked under matching conditions.
 
-| | Animated QR | Lumen Code (phone screen) | Lumen Code (laptop screen) |
-|---|---|---|---|
-| Grid | 117 × 117 = 13 689 | 83 × 147 = 12 201 | 143 × 254 = 36 322 |
-| Bits per cell | 1 | 2 (C4) | 2 (C4) / 3 (C8) |
-| Payload per frame | 1.24 KB | 2.2 KB | 6.9 KB / 10.3 KB |
-| Raw rate (12 FPS) | 15 KB/s | 27 KB/s | 82 KB/s / 124 KB/s |
-| Effective factor with 20% of frames dropped | ÷ 3.25 (loop, 46-frame file) | ÷ 1.26 | ÷ 1.26 |
-| Half of a frame blurred | Whole frame lost | Codewords in the other half still usable | Same as left |
+| Sending device | Receiving device | Speed reached in testing |
+|---|---|---|
+| Computer | iPhone app | About 0.5 MB/s |
+| Android app | iPhone app | About 100 KB/s |
 
-With 20% of frames dropped, which is common, Lumen Code (C4) on a laptop screen is about **14 times** faster than an animated QR code (82/1.26 ≈ 65 KB/s against 15/3.25 ≈ 4.6 KB/s), and on a phone screen about **4.6 times** faster.
+These are speeds reached in testing, not sustained averages guaranteed on every device. Higher playback frame rates can increase transfer speed when the devices have enough capacity; results also depend on the display, camera, distance and lighting.
+
+Full device models, software versions, playback frame rates, file sizes, compression settings, timing definitions and repeated-run logs have not been recorded alongside these two results. They cannot establish a speed multiple over another protocol. Future measurements should record those conditions and distinguish the live receive rate from the completed file's average rate, especially when compression changes the relationship between original-file throughput and link throughput.
 
 ## 4.3 Seven sources
 

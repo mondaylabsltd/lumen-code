@@ -68,6 +68,13 @@ android {
         getByName("main") { kotlin.srcDir(layout.buildDirectory.dir("generated/uniffi").get().asFile) }
     }
     packaging { jniLibs { useLegacyPackaging = false } }
+
+    // Keep both languages available offline when the user switches languages in the app.
+    bundle {
+        language {
+            enableSplit = false
+        }
+    }
 }
 
 java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }

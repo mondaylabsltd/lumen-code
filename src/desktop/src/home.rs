@@ -1,8 +1,8 @@
-//! The landing screen: brand, hero, the two choices and the facts (the web's index.html).
+//! The home screen: brand, headline and the two actions.
 
 use crate::app::Root;
 use crate::theme::*;
-use gpui::{div, prelude::*, px, rgba, AnyElement, Context, FontWeight, HighlightStyle, Hsla, Rgba, StyledText, Window};
+use gpui::{div, prelude::*, px, AnyElement, Context, FontWeight, HighlightStyle, Hsla, Rgba, StyledText, Window};
 use lumen_app::app::{Event, Screen};
 
 /// Text in the hero gradient (cyan → pink → amber), one colour per character.
@@ -21,121 +21,121 @@ pub fn gradient_text(text: &str) -> StyledText {
     StyledText::new(text.to_string()).with_highlights(highlights)
 }
 
-fn choice(root: &Root, id: &'static str, icon_name: &str, tint: u32, title: &str, desc: &str, go: &str, screen: Screen) -> AnyElement {
+fn choice(root: &Root, id: &'static str, icon_name: &str, tint: u32, title: &str, screen: Screen) -> AnyElement {
     let rt = root.rt.clone();
     div()
         .id(id)
         .flex_1()
         .min_w_0()
+        .h_full()
         .flex()
-        .flex_col()
-        .gap(px(10.))
-        .p(px(22.))
-        .rounded(px(20.))
-        .bg(gpui::linear_gradient(180., gpui::linear_color_stop(white(0.05), 0.), gpui::linear_color_stop(white(0.02), 1.)))
+        .items_center()
+        .justify_center()
+        .gap(px(12.))
+        .px(px(18.))
+        .rounded(px(16.))
+        .bg(c(0x0e131b))
         .border_1()
         .border_color(line())
-        .hover(|s| s.border_color(line2()))
+        .hover(move |s| s.bg(c(0x151c27)).border_color(c(tint).opacity(0.45)))
         .cursor_pointer()
         .on_click(move |_, _, _| rt.dispatch(Event::Navigate { screen }))
-        .child(icon_tile(icon_name, tint, 46.))
-        .child(div().mt(px(6.)).text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).child(title.to_string()))
-        .child(div().text_size(px(14.)).text_color(c(MUTED)).child(desc.to_string()))
-        .child(div().mt_auto().pt(px(8.)).text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(go.to_string()))
+        .child(icon_tile(icon_name, tint, 38.))
+        .child(div().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child(title.to_string()))
         .into_any_element()
 }
 
 pub fn render(root: &mut Root, window: &mut Window, _cx: &mut Context<Root>) -> impl IntoElement {
     let rt = root.rt.clone();
-    let wide = f32::from(window.viewport_size().width) >= 640.0;
-    let fact = |t: &str, p: &str| {
-        div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(root.t(t)))
-            .child(div().text_size(px(13.)).text_color(c(MUTED)).child(root.t(p)))
-    };
+    let height = f32::from(window.viewport_size().height);
+    let compact = height < 560.0;
     div().id("home").size_full().overflow_y_scroll().child(
         div()
-            .max_w(px(980.))
+            .w_full()
+            .max_w(px(960.))
+            .h(px(height.max(440.)))
             .mx_auto()
-            .px(px(20.))
-            .pt(px(40.))
-            .pb(px(24.))
+            .px(px(28.))
+            .pt(px(title_inset(window) + 20.))
+            .pb(px(20.))
             .flex()
             .flex_col()
             .child(
                 div()
+                    .h(px(40.))
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .child(div().flex().items_center().gap(px(10.)).child(brand_mark(7.)).child(div().font_weight(FontWeight::SEMIBOLD).child("Lumen Code")))
-                    .child(div().flex_1())
+                    .justify_between()
+                    .child(
+                        div().flex().items_center().gap(px(10.))
+                            .child(brand_mark(5.))
+                            .child(div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).child("Lumen Code")),
+                    )
                     .child(
                         div()
                             .id("lang")
-                            .px(px(10.))
-                            .py(px(5.))
-                            .rounded(px(9.))
-                            .border_1()
-                            .border_color(line())
+                            .h(px(36.))
+                            .px(px(12.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(10.))
                             .text_size(px(12.))
                             .text_color(c(MUTED))
                             .cursor_pointer()
-                            .hover(|s| s.text_color(c(TEXT)))
+                            .hover(|s| s.bg(white(0.04)).text_color(c(TEXT)))
                             .child("中 / EN")
                             .on_click(move |_, _, _| rt.dispatch(Event::ToggleLang)),
                     ),
             )
             .child(
                 div()
-                    .pt(px(80.))
-                    .pb(px(44.))
+                    .flex_1()
+                    .min_h_0()
                     .flex()
-                    .flex_col()
-                    .gap(px(14.))
+                    .items_center()
+                    .justify_center()
                     .child(
                         div()
-                            .text_size(px(52.))
-                            .line_height(px(56.))
-                            .font_weight(FontWeight::BOLD)
-                            .child(div().child(root.t("heroA")))
-                            .child(div().child(gradient_text(root.t("heroB")))),
-                    )
-                    .child(div().max_w(px(560.)).text_size(px(17.)).text_color(c(MUTED)).child(root.t("heroP"))),
+                            .w_full()
+                            .max_w(px(520.))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .text_center()
+                                    .text_size(px(if compact { 30. } else { 38. }))
+                                    .line_height(px(if compact { 40. } else { 48. }))
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(div().child(root.t("heroA")))
+                                    .child(div().child(gradient_text(root.t("heroB")))),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .max_w(px(420.))
+                                    .h(px(80.))
+                                    .flex_none()
+                                    .mt(px(if compact { 28. } else { 36. }))
+                                    .flex()
+                                    .gap(px(16.))
+                                    .child(choice(root, "choose-send", "screen", CYAN, root.t("sendTitle"), Screen::Send))
+                                    .child(choice(root, "choose-recv", "scan", PINK, root.t("recvTitle"), Screen::Receive)),
+                            ),
+                    ),
             )
+            // Keep the source version available for reports, without another block of copy.
             .child(
                 div()
-                    .flex()
-                    .when(!wide, |d| d.flex_col())
-                    .gap(px(14.))
-                    .child(choice(root, "choose-send", "screen", CYAN, root.t("sendTitle"), root.t("sendDesc"), root.t("go"), Screen::Send))
-                    .child(choice(root, "choose-recv", "scan", PINK, root.t("recvTitle"), root.t("recvDesc"), root.t("go"), Screen::Receive)),
-            )
-            .child(
-                div()
-                    .mt(px(56.))
-                    .pt(px(26.))
-                    .border_t_1()
-                    .border_color(line())
-                    .flex()
-                    .flex_col()
-                    .gap(px(18.))
-                    .child(div().flex().gap(px(24.)).child(fact("f1t", "f1p")).child(fact("f2t", "f2p")))
-                    .child(div().flex().gap(px(24.)).child(fact("f3t", "f3p")).child(fact("f4t", "f4p"))),
-            )
-            .child(div().mt(px(40.)).text_size(px(12.)).text_color(c(FAINT)).child(root.t("foot")))
-            // the version, for reports: app version and the commit of the sources
-            .child(
-                div()
-                    .mt(px(6.))
+                    .flex_none()
+                    .pt(px(24.))
+                    .text_center()
                     .text_size(px(11.))
                     .font_family(MONO)
                     .text_color(c(FAINT))
                     .child(format!("{} {} · {}", root.t("buildLabel"), env!("CARGO_PKG_VERSION"), root.view.build)),
-            )
-            .child(div().h(px(1.)).bg(rgba(0x00000000))),
+            ),
     )
 }
