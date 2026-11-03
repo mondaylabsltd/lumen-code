@@ -63,6 +63,31 @@ test('home page: pricing, the store apps not yet published, the receiver screens
 	}
 });
 
+test('home page: each app links where to get it', async ({ page }) => {
+	await page.goto('/zh');
+	const cards = page.locator('#apps li.card');
+	await expect(cards).toHaveCount(4);
+	await expect(cards.nth(0).locator('a.store')).toHaveText(['发送文件', '接收']);
+	await expect(cards.nth(0).locator('a.store').first()).toHaveAttribute('href', '/zh/send');
+	for (const i of [1, 2]) await expect(cards.nth(i).locator('.store')).toHaveText(['即将上架']);
+	const files = await cards
+		.nth(3)
+		.locator('a.store')
+		.evaluateAll((as) => as.map((a) => a.getAttribute('href')));
+	const v = pkg.version;
+	expect(files).toEqual(
+		[
+			'macos-universal.dmg',
+			'windows-x86_64.zip',
+			'linux-x86_64.tar.gz',
+			'linux-aarch64.tar.gz'
+		].map(
+			(f) =>
+				`https://github.com/mondaylabsltd/lumen-code/releases/download/v${v}/LumenCode-${v}-${f}`
+		)
+	);
+});
+
 test('the home page links the privacy policy and the terms, in its language', async ({ page }) => {
 	await page.goto('/zh');
 	await page.click('footer >> text=隐私政策');

@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { LANDING } from './landing';
+import pkg from '../../package.json' with { type: 'json' };
 import { Sender, RECEIVER_LIMITS } from '../../../core/transfer.js';
 import { MAX_BLOCK_SYMBOLS } from '../../../core/frame.js';
 import { ECC_PERCENT, HEADER_BITS, MODES } from '../../../core/layout.js';
@@ -96,7 +97,7 @@ describe('settings the apps offer', () => {
 		expect(page('zh')).toContain(`${min}–${max} fps（默认 ${dflt}）`);
 	});
 
-	it('phone cameras: the fastest capture a sender can ask for', () => {
+	it('phone cameras: the fastest capture a sender can ask for (README)', () => {
 		const maxFps = num(/pub const MAX_FPS: u32 = (\d+)/, coreApp);
 		// the core's capture bands: (camera fps, sender fps from which it is chosen, …)
 		const bands = [
@@ -106,11 +107,6 @@ describe('settings the apps offer', () => {
 		// faster bands exist for faster senders, but no Lumen Code sender plays above MAX_FPS
 		const iphone = Math.max(...bands.filter(([, from]) => from <= maxFps).map(([fps]) => fps));
 		const android = num(/maxFps\(\): Int = if \(rangeFor\((\d+)\)/, androidCamera);
-		const [en, zh] = [LANDING.en.apps.items, LANDING.zh.apps.items];
-		expect(en[1].text).toContain(`up to ${iphone} frames a second`);
-		expect(en[2].text).toContain(`up to ${android} frames a second`);
-		expect(zh[1].text).toContain(`最高每秒 ${iphone} 帧`);
-		expect(zh[2].text).toContain(`最高每秒 ${android} 帧`);
 		expect(read('README.md')).toContain(
 			`up to ${iphone} fps on iPhone and ${android} fps on Android`
 		);
@@ -119,6 +115,23 @@ describe('settings the apps offer', () => {
 		);
 		// the screen refresh rate is not a code rate: codes change at most MAX_FPS times a second
 		for (const lang of LANGS) expect(page(lang)).not.toMatch(/\bHz\b/);
+	});
+
+	it('desktop downloads: the file names the release builds', () => {
+		// the home page links LumenCode-<version>-{macos-universal.dmg, windows-x86_64.zip,
+		// linux-x86_64.tar.gz, linux-aarch64.tar.gz} of the release tagged v<version>
+		const packages = read('.github/workflows/desktop-packages.yml');
+		expect(read('src/desktop/scripts/build-macos-app.sh')).toContain(
+			'dmg="$out/LumenCode-$version-macos-$arch.dmg"'
+		);
+		expect(read('src/desktop/scripts/release-macos-local.sh')).toContain('--arch universal');
+		expect(packages).toContain('name="LumenCode-$version-linux-${{ matrix.arch }}"');
+		expect(packages).toContain('tar -czf "$name.tar.gz"');
+		expect(packages).toMatch(/- arch: x86_64[\s\S]*- arch: aarch64/);
+		expect(packages).toContain('$name = "LumenCode-$version-windows-x86_64"');
+		expect(packages).toMatch(/\$name\.zip/);
+		// the release tag is v + the desktop app's version, and the site is built with the same one
+		expect(read('src/desktop/Cargo.toml')).toMatch(new RegExp(`^version = "${pkg.version}"$`, 'm'));
 	});
 
 	it('camera: the cell sizes at which the receivers stop and become steady', () => {

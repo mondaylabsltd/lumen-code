@@ -22,6 +22,28 @@
 			: { spec: 'PROTOCOL.md', guide: 'guide/README.md' }
 	);
 	const buildGuide = `${REPO}#native-apps-ios-android-desktop`;
+	// the desktop files of this version's GitHub release (names from build-macos-app.sh and
+	// desktop-packages.yml)
+	const asset = (file: string) =>
+		`${REPO}/releases/download/v${BUILD.version}/LumenCode-${BUILD.version}-${file}`;
+	type Link = { label: string; href: string; external?: boolean };
+	const store = (label: string, href: string | null): Link[] =>
+		href ? [{ label, href, external: true }] : [];
+	// per card of the Apps section, in its order: web, iPhone, Android, desktop
+	const appLinks: Link[][] = $derived([
+		[
+			{ label: c.hero.send, href: path(lang, 'send') },
+			{ label: c.hero.recv, href: path(lang, 'recv') }
+		],
+		store('App Store', STORES.appStore),
+		store('Google Play', STORES.googlePlay),
+		[
+			{ label: 'macOS', href: asset('macos-universal.dmg'), external: true },
+			{ label: 'Windows', href: asset('windows-x86_64.zip'), external: true },
+			{ label: 'Linux x86_64', href: asset('linux-x86_64.tar.gz'), external: true },
+			{ label: 'Linux ARM64', href: asset('linux-aarch64.tar.gz'), external: true }
+		]
+	]);
 	const stores = [
 		{ name: 'App Store', url: STORES.appStore },
 		{ name: 'Google Play', url: STORES.googlePlay }
@@ -196,14 +218,18 @@
 						<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d={appIcons[i]} /></svg>
 						<h3>{item.name}</h3>
 						<p class="req">{item.req}</p>
-						<p>{item.text}</p>
+						<div class="stores">
+							{#each appLinks[i] as l (l.href)}
+								<a class="store" href={l.href} rel={l.external ? 'external' : undefined}
+									>{l.label}</a
+								>
+							{:else}
+								<span class="store soon">{c.soon}</span>
+							{/each}
+						</div>
 					</li>
 				{/each}
 			</ul>
-			<div class="actions">
-				<a class="button tonal" href={`${REPO}/releases`} rel="external">{t('releasesLink')}</a>
-				<a class="button tonal" href={buildGuide} rel="external">{c.pricing.build.action}</a>
-			</div>
 		</section>
 
 		<section id="how" class="section wrap">
@@ -955,6 +981,9 @@
 	}
 	.plan .button {
 		align-self: flex-start;
+	}
+	.card .stores {
+		margin-top: 16px;
 	}
 	.stores {
 		display: flex;

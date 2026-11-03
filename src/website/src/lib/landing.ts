@@ -48,7 +48,7 @@ export interface Landing {
 	};
 	limits: { title: string; lead: string; items: Item[] };
 	open: { title: string; items: Item[] };
-	apps: { title: string; lead: string; items: { name: string; req: string; text: string }[] };
+	apps: { title: string; lead: string; items: { name: string; req: string }[] };
 	pricing: { title: string; lead: string; build: Plan; store: Plan; note: string };
 	faq: { title: string; items: { q: string; a: string }[] };
 	cta: { title: string; text: string };
@@ -179,23 +179,19 @@ const en: Landing = {
 		items: [
 			{
 				name: 'Web',
-				req: 'Any browser with a camera',
-				text: 'Open the page and use it; nothing to install. JavaScript or Rust/WebAssembly engine.'
+				req: 'Any browser with a camera'
 			},
 			{
 				name: 'iPhone',
-				req: 'iOS 17 or later',
-				text: 'Uses the camera directly, at up to 120 frames a second, so it usually receives faster than the browser.'
+				req: 'iOS 17 or later'
 			},
 			{
 				name: 'Android',
-				req: 'Android 10 or later',
-				text: 'Uses the camera directly, at up to 60 frames a second, so it usually receives faster than the browser. Its own exposure control avoids washed-out colours and blur.'
+				req: 'Android 10 or later'
 			},
 			{
 				name: 'Desktop',
-				req: 'macOS, Windows, Linux',
-				text: 'Free download. Send from a computer screen, or receive with a webcam.'
+				req: 'macOS 12+, Windows 10/11, Linux'
 			}
 		]
 	},
@@ -348,23 +344,19 @@ const zh: Landing = {
 		items: [
 			{
 				name: '网页',
-				req: '任何带相机的浏览器',
-				text: '打开网页就能用，不用安装；可选 JavaScript 或 Rust/WebAssembly 引擎。'
+				req: '任何带相机的浏览器'
 			},
 			{
 				name: 'iPhone',
-				req: 'iOS 17 及以上',
-				text: '直接调用相机，最高每秒 120 帧，接收通常比网页版快。'
+				req: 'iOS 17 及以上'
 			},
 			{
 				name: 'Android',
-				req: 'Android 10 及以上',
-				text: '直接调用相机，最高每秒 60 帧，接收通常比网页版快；曝光由应用控制，减少过曝和拖影。'
+				req: 'Android 10 及以上'
 			},
 			{
 				name: '桌面',
-				req: 'macOS、Windows、Linux',
-				text: '免费下载。用电脑屏幕发送，或用摄像头接收。'
+				req: 'macOS 12+、Windows 10/11、Linux'
 			}
 		]
 	},
