@@ -1,0 +1,28 @@
+# JNA's native jnidispatch looks up its Java classes, fields and methods by name.
+# Keep that JNI boundary; the application and AndroidX remain fully optimizable.
+-keep class com.sun.jna.** { *; }
+
+# JNA also contains optional desktop AWT adapters. Android has no AWT and the
+# application never calls those entry points; do not suppress other missing types.
+-dontwarn java.awt.Component
+-dontwarn java.awt.GraphicsEnvironment
+-dontwarn java.awt.HeadlessException
+-dontwarn java.awt.Window
+
+# UniFFI uses JNA direct mapping: native method names are Rust symbol names.
+-keepclasseswithmembers,includedescriptorclasses class uniffi.lumen_ffi.** {
+    native <methods>;
+}
+
+# JNA discovers struct constructors and fields reflectively. FieldOrder contains
+# literal field names, so those fields must not be renamed or removed.
+-keepattributes RuntimeVisibleAnnotations,AnnotationDefault
+-keep class uniffi.lumen_ffi.** extends com.sun.jna.Structure {
+    <init>(...);
+    <fields>;
+}
+
+# Native-to-Java callbacks are invoked through these interfaces.
+-keep interface uniffi.lumen_ffi.** extends com.sun.jna.Callback {
+    public *;
+}

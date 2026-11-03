@@ -24,7 +24,7 @@ android {
         applicationId = "ltd.mondaylabs.lumencode"
         minSdk = 29
         targetSdk = 36
-        versionCode = 2
+        versionCode = 3
         versionName = "1.0.1"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
@@ -43,7 +43,7 @@ android {
             buildConfigField("boolean", "SCRIPTS", "true")
         }
         release {
-            optimization { enable = false }
+            optimization { enable = true }
             signingConfig = signingConfigs.findByName("release")
             buildConfigField("boolean", "SCRIPTS", "false")
         }
@@ -111,6 +111,13 @@ val cargoBuild = tasks.register<Exec>("cargoBuild") {
 tasks.named("preBuild") { dependsOn(cargoBuild) }
 
 dependencies {
+    // CameraX -> AppCompat previously selected Fragment 1.1.0. Constrain the
+    // transitive SDK without introducing Fragment screens or changing the camera stack.
+    constraints {
+        implementation(libs.androidx.fragment) {
+            because("Avoid the deprecated Fragment 1.1.0 SDK pulled in by CameraX/AppCompat")
+        }
+    }
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)

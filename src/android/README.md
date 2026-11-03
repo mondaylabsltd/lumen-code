@@ -25,8 +25,10 @@ Gradle builds the Rust core: the `cargoBuild` task runs `scripts/build-core.sh` 
 | Build type | Use |
 |---|---|
 | `debug` | Development. The build is debuggable, so ART interprets much of the UI and checks every JNI call; the interface and every call into Rust run several times slower than in release. Do not judge performance with it. |
-| `bench` | Release code (compiled ahead of time, no JNI checks), profileable with simpleperf, with the test hooks below. |
-| `release` | The app. Signed with the upload key configured in the git-ignored `keystore.properties`; unsigned when no release key is configured. |
+| `bench` | The same R8 code and resource optimization as release, profileable with simpleperf, with the test hooks below. |
+| `release` | R8 code shrinking, optimization and obfuscation, with resource shrinking. Signed with the upload key configured in the git-ignored `keystore.properties`; unsigned when no release key is configured. |
+
+Release and bench use AGP’s optimization DSL. JNA and the generated UniFFI JNI, structure and callback boundaries have explicit rules in `app/src/main/keepRules/jna.keep`; avoid blanket application-wide keep rules. The AAB includes the R8 metadata and deobfuscation mapping automatically. Preserve `app/build/outputs/mapping/release/` alongside each distributed build.
 
 ## Layout
 
