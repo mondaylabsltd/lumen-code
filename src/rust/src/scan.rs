@@ -7,7 +7,7 @@
 //! 5. per-quad homographies; each cell sampled and normalised by local white/ink references
 //! 6. k-means colour classification with local gain correction; RS with erasure retry
 
-use crate::frame::{decode_codewords, Codeword};
+use crate::frame::{decode_codewords_with, Codeword};
 use crate::layout::{cells_per_codeword, codewords_per_frame, header_mask, unpack_header, Header, Layout, HEADER_BITS, INK, MODES, PAPER};
 use std::collections::{HashMap, HashSet};
 
@@ -270,6 +270,9 @@ type V2 = [f64; 2];
 #[derive(Default)]
 pub struct Scanner {
     luma: Vec<u8>,
+    // the camera path's smoothed luma and its working rows (buffers only grow)
+    soft: std::cell::RefCell<(Vec<u8>, Vec<u16>)>,
+    track: std::cell::RefCell<Track>,
     thr: Vec<u8>,
     bmin: Vec<u8>,
     bmax: Vec<u8>,
@@ -279,7 +282,74 @@ pub struct Scanner {
     reuse_misses: u32,
     // The grid layout of the last decoded frame: a transfer keeps its size, and building a
     // layout (Hilbert order, header positions) costs as much as a tenth of a scan.
-    layout: std::cell::RefCell<Option<std::sync::Arc<Layout>>>,
+    layout: std::cell::RefCell<Option<std::sync::Arc<Grid>>>,
+}
+
+/// What the camera path keeps of a code from one capture to the next. A code on a screen
+/// in front of a held phone hardly moves or changes colour in a hundredth of a second:
+/// the lattice points are looked for where they were (moved as the finders moved), and the
+/// classifier starts from the colours it ended with.
+#[derive(Default)]
+struct Track {
+    /// Grid size and colour mode all of this belongs to.
+    grid: (usize, usize, usize),
+    /// Lattice points in image pixels, which of them were located, and the four corner
+    /// points (TL TR BL BR) they were measured with.
+    points: Vec<f64>,
+    located: Vec<bool>,
+    corners: [Option<V2>; 4],
+    /// Colour centres and block gains of the last capture that decoded well.
+    cent: Vec<f32>,
+    gain: Vec<[f32; 3]>,
+    /// Decodes since each was stored.
+    points_age: u32,
+    colour_age: u32,
+}
+
+/// Captures a tracked state stays usable for (at 120 captures a second, a quarter of one).
+const TRACK_AGE: u32 = 30;
+
+/// The map that takes three or four points to where they are now: affine or projective.
+fn motion(from: &[Option<V2>; 4], to: &[Option<V2>; 4]) -> Option<H3> {
+    let both: Vec<(V2, V2)> = (0..4).filter_map(|k| Some((from[k]?, to[k]?))).collect();
+    let h = match both.len() {
+        4 => homography(&[both[0].0, both[1].0, both[2].0, both[3].0], &[both[0].1, both[1].1, both[2].1, both[3].1])?,
+        3 => {
+            let m = [both[0].0[0], both[0].0[1], 1.0, both[1].0[0], both[1].0[1], 1.0, both[2].0[0], both[2].0[1], 1.0];
+            let a = solve3(m, [both[0].1[0], both[1].1[0], both[2].1[0]])?;
+            let b = solve3(m, [both[0].1[1], both[1].1[1], both[2].1[1]])?;
+            [a[0], a[1], a[2], b[0], b[1], b[2], 0.0, 0.0, 1.0]
+        }
+        _ => return None,
+    };
+    // the same code a moment later: about the same size, no mirror image
+    let det = h[0] * h[4] - h[1] * h[3];
+    (det > 0.5 && det < 2.0).then_some(h)
+}
+
+/// A layout and what the decoder derives from it alone.
+struct Grid {
+    layout: Layout,
+    /// Cell column and row of each data slot (`data_order` taken apart once).
+    slot_x: Vec<u16>,
+    slot_y: Vec<u16>,
+    /// The data slot of each cell (`NO_SLOT`: not a data cell).
+    cell_slot: Vec<u32>,
+}
+
+const NO_SLOT: u32 = u32::MAX;
+
+impl Grid {
+    fn new(x: usize, y: usize) -> Option<Grid> {
+        let layout = Layout::new(x, y)?;
+        let slot_x = layout.data_order.iter().map(|&c| (c as usize % x) as u16).collect();
+        let slot_y = layout.data_order.iter().map(|&c| (c as usize / x) as u16).collect();
+        let mut cell_slot = vec![NO_SLOT; x * y];
+        for (s, &c) in layout.data_order.iter().enumerate() {
+            cell_slot[c as usize] = s as u32;
+        }
+        Some(Grid { layout, slot_x, slot_y, cell_slot })
+    }
 }
 
 struct Ctx<'a> {
@@ -288,9 +358,11 @@ struct Ctx<'a> {
     bs: usize,
     bw: usize,
     luma: &'a [u8],
+    soft: &'a std::cell::RefCell<(Vec<u8>, Vec<u16>)>,
+    track: &'a std::cell::RefCell<Track>,
     thr: &'a [u8],
     px: Pixels<'a>,
-    layout_cache: &'a std::cell::RefCell<Option<std::sync::Arc<Layout>>>,
+    layout_cache: &'a std::cell::RefCell<Option<std::sync::Arc<Grid>>>,
     hint: Option<Hint>,
     /// Whether `thr` covers the whole image (else only the hint windows).
     thr_full: bool,
@@ -371,14 +443,17 @@ impl Scanner {
                 .collect()
         });
         self.thresholds(luma, w, h, bs, bw, bh, regions.as_deref());
-        let mut ctx = Ctx { w, h, bs, bw, luma, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: regions.is_none() };
+        let soft_bufs = std::mem::take(&mut self.soft);
+        let soft = &soft_bufs;
+        let mut ctx = Ctx { w, h, bs, bw, luma, soft, track: &self.track, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: regions.is_none() };
         let (mut res, mut tried_reuse) = ctx.run(skip, self.last_header);
         if res.reason == RETHRESHOLD {
             // the windows missed: the whole image after all
             self.thresholds(luma, w, h, bs, bw, bh, None);
-            ctx = Ctx { w, h, bs, bw, luma, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: true };
+            ctx = Ctx { w, h, bs, bw, luma, soft, track: &self.track, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: true };
             (res, tried_reuse) = ctx.run(skip, self.last_header);
         }
+        self.soft = soft_bufs;
         if res.ok && !res.header_reused {
             self.last_header = res.header;
             self.reuse_misses = 0;
@@ -1316,17 +1391,17 @@ impl<'a> Ctx<'a> {
     fn decode(&self, hdr: Header, r: [Option<Refined>; 4], skip: Option<&SkipMap>, reused: bool) -> ScanResult {
         let (xg, yg) = (hdr.x as usize, hdr.y as usize);
         let (mode, n, nsym) = (hdr.mode as usize, hdr.n as usize, hdr.nsym as usize);
-        let cached = self.layout_cache.borrow().as_ref().filter(|l| l.x == xg && l.y == yg).cloned();
-        let layout = match cached {
-            Some(l) => l,
+        let cached = self.layout_cache.borrow().as_ref().filter(|g| g.layout.x == xg && g.layout.y == yg).cloned();
+        let grid = match cached {
+            Some(g) => g,
             None => {
-                let Some(l) = Layout::new(xg, yg) else { return ScanResult::fail("layout", 0) };
-                let l = std::sync::Arc::new(l);
-                *self.layout_cache.borrow_mut() = Some(l.clone());
-                l
+                let Some(g) = Grid::new(xg, yg) else { return ScanResult::fail("layout", 0) };
+                let g = std::sync::Arc::new(g);
+                *self.layout_cache.borrow_mut() = Some(g.clone());
+                g
             }
         };
-        let layout = &*layout;
+        let layout = &grid.layout;
         let (lx, ly) = (&layout.lx, &layout.ly);
         let (nx, ny) = (lx.len(), ly.len());
         let avail: Vec<usize> = (0..4).filter(|&k| r[k].is_some()).collect();
@@ -1473,30 +1548,46 @@ impl<'a> Ctx<'a> {
 
         let mut found = 0usize;
         let mut br_found = r[BR].is_some();
+        // The next point to look for is the one with the most located neighbours (5 for each of
+        // the eight around it, 1 for each of the next ring; the corner pattern waits a little).
+        // The scores are kept up to date as points are located, not recounted for every pick.
+        let mut score = vec![0i32; nl];
+        score[kk[BR]] = -3;
+        let located = |score: &mut [i32], k: usize| {
+            let (i, j) = (k % nx, k / nx);
+            for jj in j.saturating_sub(2)..=(j + 2).min(ny - 1) {
+                for ii in i.saturating_sub(2)..=(i + 2).min(nx - 1) {
+                    score[jj * nx + ii] += if jj.abs_diff(j) <= 1 && ii.abs_diff(i) <= 1 { 5 } else { 1 };
+                }
+            }
+        };
+        for k in 0..nl {
+            if state[k] == 1 {
+                located(&mut score, k);
+            }
+        }
         for &k in &missing {
             state[k] = 2;
         }
+        // Tracking (camera path): where the points were in the last capture, moved as the
+        // corner points moved since.
+        let camera = matches!(self.px, Pixels::Yuv { .. });
+        let now_corners = r.map(|o| o.map(|f| [f.x, f.y]));
+        let tracked: Option<(H3, Vec<f64>, Vec<bool>)> = if camera {
+            let mut t = self.track.borrow_mut();
+            t.points_age += 1;
+            t.colour_age += 1;
+            let usable = t.grid == (xg, yg, mode) && t.points_age <= TRACK_AGE && t.points.len() == nl * 2;
+            usable.then(|| motion(&t.corners, &now_corners)).flatten().map(|m| (m, t.points.clone(), t.located.clone()))
+        } else {
+            None
+        };
         loop {
             let mut pick = usize::MAX;
-            let mut pscore = -1i64;
+            let mut pscore = -1i32;
             for k in 0..nl {
-                if state[k] != 0 {
-                    continue;
-                }
-                let (i, j) = ((k % nx) as i64, (k / nx) as i64);
-                let mut sc = 0i64;
-                for jj in (j - 2).max(0)..=(j + 2).min(ny as i64 - 1) {
-                    for ii in (i - 2).max(0)..=(i + 2).min(nx as i64 - 1) {
-                        if state[jj as usize * nx + ii as usize] == 1 {
-                            sc += if (jj - j).abs() <= 1 && (ii - i).abs() <= 1 { 5 } else { 1 };
-                        }
-                    }
-                }
-                if k == kk[BR] {
-                    sc -= 3;
-                }
-                if sc > pscore {
-                    pscore = sc;
+                if state[k] == 0 && score[k] > pscore {
+                    pscore = score[k];
                     pick = k;
                 }
             }
@@ -1504,25 +1595,9 @@ impl<'a> Ctx<'a> {
                 break;
             }
             let k = pick;
-            // predict: homography + residual interpolation
             let (i, j) = ((k % nx) as i64, (k / nx) as i64);
             let (gx, gy) = (gx_of(k), gy_of(k));
             let (bx, by) = apply_h(&hcur, gx, gy);
-            let (mut sw, mut rx, mut ry) = (0.0, 0.0, 0.0);
-            for jj in (j - 2).max(0)..=(j + 2).min(ny as i64 - 1) {
-                for ii in (i - 2).max(0)..=(i + 2).min(nx as i64 - 1) {
-                    let k2 = jj as usize * nx + ii as usize;
-                    if state[k2] != 1 {
-                        continue;
-                    }
-                    let (hx, hy) = apply_h(&hcur, gx_of(k2), gy_of(k2));
-                    let wgt = 1.0 / (((ii - i) * (ii - i) + (jj - j) * (jj - j)) as f64);
-                    sw += wgt;
-                    rx += wgt * (pp[k2 * 2] - hx);
-                    ry += wgt * (pp[k2 * 2 + 1] - hy);
-                }
-            }
-            let pred = if sw > 0.0 { [bx + rx / sw, by + ry / sw] } else { [bx, by] };
             let (ax_, ay_) = apply_h(&hcur, gx + 1.0, gy);
             let (bx_, by_) = apply_h(&hcur, gx, gy + 1.0);
             let du = [ax_ - bx, ay_ - by];
@@ -1530,9 +1605,43 @@ impl<'a> Ctx<'a> {
             let cell = (du[0].hypot(du[1]) + dv[0].hypot(dv[1])) / 2.0;
             let is_br = k == kk[BR];
             let sc = if is_br { Score::Corner } else { Score::Marker };
-            let (sx, sy, sbest) = self.search(pred, du, dv, cell * if is_br { 1.6 } else { 0.95 }, sc);
-            if sbest > 0.3 * contrast {
-                let (fx, fy, fscore) = self.search([sx, sy], du, dv, cell * 0.3, sc);
+            // tracked: a close look where the point was is enough
+            let mut hit = None;
+            if let Some((m, points, was)) = tracked.as_ref().filter(|t| t.2[k]) {
+                debug_assert!(was[k]);
+                let (tx, ty) = apply_h(m, points[k * 2], points[k * 2 + 1]);
+                let (fx, fy, fscore) = self.search([tx, ty], du, dv, cell * 0.3, sc);
+                if fscore > 0.3 * contrast {
+                    hit = Some((fx, fy, fscore));
+                }
+            }
+            if hit.is_none() {
+                // predict: homography + residual interpolation
+                let (mut sw, mut rx, mut ry) = (0.0, 0.0, 0.0);
+                for jj in (j - 2).max(0)..=(j + 2).min(ny as i64 - 1) {
+                    for ii in (i - 2).max(0)..=(i + 2).min(nx as i64 - 1) {
+                        let k2 = jj as usize * nx + ii as usize;
+                        if state[k2] != 1 {
+                            continue;
+                        }
+                        let (hx, hy) = apply_h(&hcur, gx_of(k2), gy_of(k2));
+                        let wgt = 1.0 / (((ii - i) * (ii - i) + (jj - j) * (jj - j)) as f64);
+                        sw += wgt;
+                        rx += wgt * (pp[k2 * 2] - hx);
+                        ry += wgt * (pp[k2 * 2 + 1] - hy);
+                    }
+                }
+                let pred = if sw > 0.0 { [bx + rx / sw, by + ry / sw] } else { [bx, by] };
+                let (sx, sy, sbest) = self.search(pred, du, dv, cell * if is_br { 1.6 } else { 0.95 }, sc);
+                if sbest > 0.3 * contrast {
+                    hit = Some(self.search([sx, sy], du, dv, cell * 0.3, sc));
+                } else {
+                    pp[k * 2] = pred[0];
+                    pp[k * 2 + 1] = pred[1];
+                    state[k] = 2;
+                }
+            }
+            if let Some((fx, fy, fscore)) = hit {
                 let thr = if is_br {
                     (self.luma_at(fx, fy) + self.luma_at(fx + 1.5 * du[0], fy + 1.5 * du[1])) / 2.0
                 } else {
@@ -1543,6 +1652,7 @@ impl<'a> Ctx<'a> {
                 pp[k * 2] = px;
                 pp[k * 2 + 1] = py;
                 state[k] = 1;
+                located(&mut score, k);
                 if is_br {
                     br_found = true;
                     corner_refs(&mut refs, k, px, py, du, dv);
@@ -1567,10 +1677,6 @@ impl<'a> Ctx<'a> {
                     }
                     fit_count = found + avail.len();
                 }
-            } else {
-                pp[k * 2] = pred[0];
-                pp[k * 2 + 1] = pred[1];
-                state[k] = 2;
             }
         }
         // a false corner predicts the lattice in the wrong place: reject the geometry
@@ -1581,6 +1687,18 @@ impl<'a> Ctx<'a> {
             let (x, y) = apply_h(&hcur, gx_of(k), gy_of(k));
             pp[k * 2] = x;
             pp[k * 2 + 1] = y;
+        }
+        if camera {
+            let mut t = self.track.borrow_mut();
+            if t.grid != (xg, yg, mode) {
+                *t = Track { grid: (xg, yg, mode), colour_age: u32::MAX, ..Track::default() };
+            }
+            t.points.clear();
+            t.points.extend_from_slice(&pp);
+            t.located.clear();
+            t.located.extend(state.iter().map(|&st| st == 1));
+            t.corners = now_corners;
+            t.points_age = 0;
         }
         let gpt = |k: usize| [pp[k * 2], pp[k * 2 + 1]];
         let (xf, yf) = (xg as f64, yg as f64);
@@ -1668,28 +1786,25 @@ impl<'a> Ctx<'a> {
                 slots.extend(jw * cpc..(jw + 1) * cpc);
             }
         }
-        let mut norm = vec![0f32; d * 3];
-        for &s in &slots {
-            let cidx = dorder[s] as usize;
-            let (cx, cy) = (cidx % xg, cidx / xg);
-            let (qi, qj) = (qi_of[cx], qj_of[cy]);
-            let q = qj * (nx - 1) + qi;
-            let (px, py) = apply_h(&qh[q], cx as f64 + 0.5, cy as f64 + 0.5);
-            let du = [qdu[q * 4] * 0.18, qdu[q * 4 + 1] * 0.18];
-            let dv = [qdu[q * 4 + 2] * 0.18, qdu[q * 4 + 3] * 0.18];
-            let a = self.cell_rgb(px, py, du, dv);
-            let fx = ((cx as f64 - lx[qi] as f64) / (lx[qi + 1] - lx[qi]) as f64).clamp(0.0, 1.0);
-            let fy = ((cy as f64 - ly[qj] as f64) / (ly[qj + 1] - ly[qj]) as f64).clamp(0.0, 1.0);
-            let k00 = qj * nx + qi;
-            let (w00, w10, w01, w11) = ((1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy);
-            for ch in 0..3 {
-                let rf = |o: usize| refs[k00 * 6 + o] * w00 + refs[(k00 + 1) * 6 + o] * w10 + refs[(k00 + nx) * 6 + o] * w01 + refs[(k00 + nx + 1) * 6 + o] * w11;
-                let (wr, kr) = (rf(ch), rf(3 + ch));
-                norm[s * 3 + ch] = ((a[ch] / 6.0 - kr) / (wr - kr).max(12.0)) as f32;
-            }
-        }
-
-        // classification: palette-seeded k-means + local gain correction
+        // how far each column / row lies between its two lattice lines
+        let fx_of: Vec<f64> = (0..xg).map(|cx| ((cx as f64 - lx[qi_of[cx]] as f64) / (lx[qi_of[cx] + 1] - lx[qi_of[cx]]) as f64).clamp(0.0, 1.0)).collect();
+        let fy_of: Vec<f64> = (0..yg).map(|cy| ((cy as f64 - ly[qj_of[cy]] as f64) / (ly[qj_of[cy] + 1] - ly[qj_of[cy]]) as f64).clamp(0.0, 1.0)).collect();
+        let (slot_x, slot_y) = (&grid.slot_x[..], &grid.slot_y[..]);
+        const GB: usize = 4;
+        let (gbw, gbh) = (xg.div_ceil(GB), yg.div_ceil(GB));
+        // Where a column / row sits among the gain blocks: the first of the two blocks it
+        // blends and the weight of the second.
+        let blend = |cells: usize, blocks: usize| -> Vec<(usize, f64)> {
+            (0..cells)
+                .map(|c| {
+                    let f = ((c as f64 + 0.5) / GB as f64 - 0.5).clamp(0.0, blocks as f64 - 1.0001);
+                    let i = (f as usize).min(blocks.saturating_sub(2));
+                    (i, if blocks > 1 { f - i as f64 } else { 0.0 })
+                })
+                .collect()
+        };
+        let (blend_x, blend_y) = (blend(xg, gbw), blend(yg, gbh));
+        let (step_x, step_y) = (if gbw > 1 { 1 } else { 0 }, if gbh > 1 { gbw } else { 0 });
         let pal = MODES[mode].palette;
         let nc = pal.len();
         let mut cent = vec![0f32; nc * 3];
@@ -1700,114 +1815,154 @@ impl<'a> Ctx<'a> {
         }
         let mut symbols = vec![0u8; d];
         let mut conf = vec![0f32; d];
-        let mut work = norm.clone();
-        let assign = |update: bool, work: &[f32], cent: &mut [f32], symbols: &mut [u8], conf: &mut [f32]| {
-            let mut sums = vec![0f64; nc * 4];
-            for &s in &slots {
-                let (rv, gv, bv) = (work[s * 3], work[s * 3 + 1], work[s * 3 + 2]);
-                let (mut b1, mut b2, mut bi) = (f32::MAX, f32::MAX, 0usize);
-                for k in 0..nc {
-                    let (dr, dg, db) = (rv - cent[k * 3], gv - cent[k * 3 + 1], bv - cent[k * 3 + 2]);
-                    let dd = dr * dr + dg * dg + db * db;
-                    if dd < b1 {
-                        b2 = b1;
-                        b1 = dd;
-                        bi = k;
-                    } else if dd < b2 {
-                        b2 = dd;
-                    }
-                }
-                symbols[s] = bi as u8;
-                if !update {
-                    // only the final pass's confidences are used
-                    conf[s] = b2.sqrt() - b1.sqrt();
-                }
-                sums[bi * 4] += rv as f64;
-                sums[bi * 4 + 1] += gv as f64;
-                sums[bi * 4 + 2] += bv as f64;
-                sums[bi * 4 + 3] += 1.0;
+        let mut colours = None;
+        if let Pixels::Yuv { cbcr, cw, ch } = self.px {
+            // The camera path: the same steps as below in single precision, each cell read
+            // once from a smoothed luma plane. Its results need not match another scanner bit
+            // for bit, as those of the RGBA path must.
+            let corners = [gpt(kk[TL]), gpt(kk[TR]), gpt(kk[BR]), gpt(kk[BL])];
+            let cam = Camera { luma: self.luma, w: self.w, h: self.h, cbcr, cw, ch };
+            let mut bufs = self.soft.borrow_mut();
+            let (soft, rows) = &mut *bufs;
+            let area = cam.smooth(&corners, cell_px, soft, rows);
+            let m = slots.len();
+            let mut cells = [vec![0f32; m], vec![0f32; m], vec![0f32; m]];
+            let at = SampleAt { slot_x, slot_y, qi_of: &qi_of, qj_of: &qj_of, qh: &qh, nx, refs: &refs, fx_of: &fx_of, fy_of: &fy_of };
+            if m == count * cpc {
+                cam.sample_all(soft, area, &grid, &at, &mut cells);
+            } else {
+                cam.sample(soft, area, &slots, &at, &mut cells);
             }
-            if update {
-                for k in 0..nc {
-                    let cnt = sums[k * 4 + 3];
-                    if cnt >= 8.0 {
-                        for ch in 0..3 {
-                            cent[k * 3 + ch] = (sums[k * 4 + ch] / cnt) as f32;
+            let gains = Gains { gbw, gbh, step_x, step_y, blend_x: &blend_x, blend_y: &blend_y, slot_x, slot_y };
+            let t = self.track.borrow();
+            let warm = (t.grid == (xg, yg, mode) && t.colour_age <= TRACK_AGE).then_some((&t.cent[..], &t.gain[..]));
+            colours = Some(match nc {
+                2 => classify::<2>(&cells, &slots, &cent, &gains, warm, &mut symbols, &mut conf),
+                4 => classify::<4>(&cells, &slots, &cent, &gains, warm, &mut symbols, &mut conf),
+                _ => classify::<8>(&cells, &slots, &cent, &gains, warm, &mut symbols, &mut conf),
+            });
+        } else {
+            let mut norm = vec![0f32; d * 3];
+            for &s in &slots {
+                let (cx, cy) = (slot_x[s] as usize, slot_y[s] as usize);
+                let (qi, qj) = (qi_of[cx], qj_of[cy]);
+                let q = qj * (nx - 1) + qi;
+                let (px, py) = apply_h(&qh[q], cx as f64 + 0.5, cy as f64 + 0.5);
+                let du = [qdu[q * 4] * 0.18, qdu[q * 4 + 1] * 0.18];
+                let dv = [qdu[q * 4 + 2] * 0.18, qdu[q * 4 + 3] * 0.18];
+                let a = self.cell_rgb(px, py, du, dv);
+                let (fx, fy) = (fx_of[cx], fy_of[cy]);
+                let k00 = qj * nx + qi;
+                let (w00, w10, w01, w11) = ((1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy);
+                for ch in 0..3 {
+                    let rf = |o: usize| refs[k00 * 6 + o] * w00 + refs[(k00 + 1) * 6 + o] * w10 + refs[(k00 + nx) * 6 + o] * w01 + refs[(k00 + nx + 1) * 6 + o] * w11;
+                    let (wr, kr) = (rf(ch), rf(3 + ch));
+                    norm[s * 3 + ch] = ((a[ch] / 6.0 - kr) / (wr - kr).max(12.0)) as f32;
+                }
+            }
+
+            // classification: palette-seeded k-means + local gain correction
+            let mut work = norm.clone();
+            let assign = |update: bool, work: &[f32], cent: &mut [f32], symbols: &mut [u8], conf: &mut [f32]| {
+                let mut sums = vec![0f64; nc * 4];
+                let mut dist = [0f32; 8];
+                let dist = &mut dist[..nc];
+                for &s in &slots {
+                    let (rv, gv, bv) = (work[s * 3], work[s * 3 + 1], work[s * 3 + 2]);
+                    // every distance first (no branches: they would be mispredicted at random),
+                    // then the nearest (the first of equals) and the nearest of the others
+                    for (dd, c) in dist.iter_mut().zip(cent.chunks_exact(3)) {
+                        let (dr, dg, db) = (rv - c[0], gv - c[1], bv - c[2]);
+                        *dd = dr * dr + dg * dg + db * db;
+                    }
+                    let (mut b1, mut bi) = (f32::MAX, 0usize);
+                    for (k, &dd) in dist.iter().enumerate() {
+                        if dd < b1 {
+                            b1 = dd;
+                            bi = k;
+                        }
+                    }
+                    let mut b2 = f32::MAX;
+                    for (k, &dd) in dist.iter().enumerate() {
+                        if k != bi && dd < b2 {
+                            b2 = dd;
+                        }
+                    }
+                    symbols[s] = bi as u8;
+                    if !update {
+                        // only the final pass's confidences are used
+                        conf[s] = b2.sqrt() - b1.sqrt();
+                    }
+                    sums[bi * 4] += rv as f64;
+                    sums[bi * 4 + 1] += gv as f64;
+                    sums[bi * 4 + 2] += bv as f64;
+                    sums[bi * 4 + 3] += 1.0;
+                }
+                if update {
+                    for k in 0..nc {
+                        let cnt = sums[k * 4 + 3];
+                        if cnt >= 8.0 {
+                            for ch in 0..3 {
+                                cent[k * 3 + ch] = (sums[k * 4 + ch] / cnt) as f32;
+                            }
                         }
                     }
                 }
-            }
-        };
-        const GB: usize = 4;
-        let (gbw, gbh) = (xg.div_ceil(GB), yg.div_ceil(GB));
-        // where each slot sits among the gain blocks: its own block, and the four it blends
-        // with their weights (the same for both passes, so worked out once)
-        struct GainAt {
-            b: usize,
-            bi: [usize; 4],
-            ax: f64,
-            ay: f64,
-        }
-        let gain_at: Vec<GainAt> = slots
-            .iter()
-            .map(|&s| {
-                let c = dorder[s] as usize;
-                let b = (c / xg / GB) * gbw + (c % xg) / GB;
-                let (cx, cy) = ((c % xg) as f64, (c / xg) as f64);
-                let fx = ((cx + 0.5) / GB as f64 - 0.5).clamp(0.0, gbw as f64 - 1.0001);
-                let fy = ((cy + 0.5) / GB as f64 - 0.5).clamp(0.0, gbh as f64 - 1.0001);
-                let ix = (fx as usize).min(gbw.saturating_sub(2));
-                let iy = (fy as usize).min(gbh.saturating_sub(2));
-                let ax = if gbw > 1 { fx - ix as f64 } else { 0.0 };
-                let ay = if gbh > 1 { fy - iy as f64 } else { 0.0 };
-                let b00 = iy * gbw + ix;
-                let b10 = if gbw > 1 { b00 + 1 } else { b00 };
-                let b01 = if gbh > 1 { b00 + gbw } else { b00 };
-                let b11 = if gbw > 1 { b01 + 1 } else { b01 };
-                GainAt { b, bi: [b00, b10, b01, b11], ax, ay }
-            })
-            .collect();
-        let gain_pass = |symbols: &[u8], cent: &[f32], work: &mut [f32]| {
-            let mut gacc = vec![0f64; gbw * gbh * 6];
-            for (&s, at) in slots.iter().zip(&gain_at) {
-                let b = at.b;
-                let k = symbols[s] as usize;
-                for ch in 0..3 {
-                    let cv = cent[k * 3 + ch] as f64;
-                    gacc[b * 6 + ch] += norm[s * 3 + ch] as f64 * cv;
-                    gacc[b * 6 + 3 + ch] += cv * cv;
+            };
+            let gain_pass = |symbols: &[u8], cent: &[f32], work: &mut [f32]| {
+                let mut gacc = vec![0f64; gbw * gbh * 6];
+                for &s in &slots {
+                    let b = (slot_y[s] as usize / GB) * gbw + slot_x[s] as usize / GB;
+                    let k = symbols[s] as usize;
+                    for ch in 0..3 {
+                        let cv = cent[k * 3 + ch] as f64;
+                        gacc[b * 6 + ch] += norm[s * 3 + ch] as f64 * cv;
+                        gacc[b * 6 + 3 + ch] += cv * cv;
+                    }
                 }
-            }
-            let lam = 0.6;
-            let mut gain = vec![0f64; gbw * gbh * 3];
-            for b in 0..gbw * gbh {
-                for ch in 0..3 {
-                    gain[b * 3 + ch] = (gacc[b * 6 + ch] + lam) / (gacc[b * 6 + 3 + ch] + lam);
+                let lam = 0.6;
+                let mut gain = vec![0f64; gbw * gbh * 3];
+                for b in 0..gbw * gbh {
+                    for ch in 0..3 {
+                        gain[b * 3 + ch] = (gacc[b * 6 + ch] + lam) / (gacc[b * 6 + 3 + ch] + lam);
+                    }
                 }
-            }
-            for (&s, at) in slots.iter().zip(&gain_at) {
-                let [b00, b10, b01, b11] = at.bi;
-                let (ax, ay) = (at.ax, at.ay);
-                for ch in 0..3 {
-                    // evaluated in the same order as the JavaScript scanner (bit-identical)
-                    let g = gain[b00 * 3 + ch] * (1.0 - ax) * (1.0 - ay) + gain[b10 * 3 + ch] * ax * (1.0 - ay) + gain[b01 * 3 + ch] * (1.0 - ax) * ay + gain[b11 * 3 + ch] * ax * ay;
-                    work[s * 3 + ch] = (norm[s * 3 + ch] as f64 / g.max(0.25)) as f32;
+                for &s in &slots {
+                    let ((ix, ax), (iy, ay)) = (blend_x[slot_x[s] as usize], blend_y[slot_y[s] as usize]);
+                    let b00 = iy * gbw + ix;
+                    let (b10, b01) = (b00 + step_x, b00 + step_y);
+                    let b11 = b01 + step_x;
+                    for ch in 0..3 {
+                        // evaluated in the same order as the JavaScript scanner (bit-identical)
+                        let g = gain[b00 * 3 + ch] * (1.0 - ax) * (1.0 - ay) + gain[b10 * 3 + ch] * ax * (1.0 - ay) + gain[b01 * 3 + ch] * (1.0 - ax) * ay + gain[b11 * 3 + ch] * ax * ay;
+                        work[s * 3 + ch] = (norm[s * 3 + ch] as f64 / g.max(0.25)) as f32;
+                    }
                 }
-            }
-        };
-        assign(true, &work, &mut cent, &mut symbols, &mut conf);
-        gain_pass(&symbols, &cent, &mut work);
-        assign(true, &work, &mut cent, &mut symbols, &mut conf);
-        gain_pass(&symbols, &cent, &mut work);
-        assign(false, &work, &mut cent, &mut symbols, &mut conf);
+            };
+            assign(true, &work, &mut cent, &mut symbols, &mut conf);
+            gain_pass(&symbols, &cent, &mut work);
+            assign(true, &work, &mut cent, &mut symbols, &mut conf);
+            gain_pass(&symbols, &cent, &mut work);
+            assign(false, &work, &mut cent, &mut symbols, &mut conf);
 
-        let cws = decode_codewords(layout, mode, n, nsym, &symbols, &conf, count, &done);
+        }
+
+        let cws = decode_codewords_with(layout, mode, n, nsym, &symbols, &conf, count, &done, camera);
         let corners = [[0.0, 0.0], [xf, 0.0], [xf, yf], [0.0, yf]].map(|[cx, cy]| {
             let (x, y) = apply_h(&hg, cx, cy);
             [x, y]
         });
         let cw_ok = cws.iter().filter(|c| c.ok).count();
         let corrected = cws.iter().filter(|c| c.ok).map(|c| c.corrected).sum();
+        // colours that decoded a fair part of the frame are worth starting from next time
+        if let Some((cent, gain)) = colours.filter(|_| 4 * cw_ok >= count - done_n) {
+            let mut t = self.track.borrow_mut();
+            if t.grid == (xg, yg, mode) {
+                t.cent = cent;
+                t.gain = gain;
+                t.colour_age = 0;
+            }
+        }
         ScanResult {
             ok: true,
             skipped: false,
@@ -1829,6 +1984,401 @@ impl<'a> Ctx<'a> {
             }),
         }
     }
+}
+
+/// A camera image, for the cell sampler.
+struct Camera<'a> {
+    luma: &'a [u8],
+    w: usize,
+    h: usize,
+    cbcr: &'a [u8],
+    cw: usize,
+    ch: usize,
+}
+
+/// Where each data slot is in the grid and among the located lattice points.
+struct SampleAt<'a> {
+    slot_x: &'a [u16],
+    slot_y: &'a [u16],
+    qi_of: &'a [usize],
+    qj_of: &'a [usize],
+    qh: &'a [H3],
+    nx: usize,
+    refs: &'a [f64],
+    fx_of: &'a [f64],
+    fy_of: &'a [f64],
+}
+
+impl Camera<'_> {
+    /// Smooths the luma under the code (`corners`) into `soft` with a binomial kernel sized to
+    /// the cell: 3, 5 or 7 pixels across. A cell is then read with one tap that weighs most of
+    /// its inside — less noise than a few point samples, and a fraction of the work. Returns
+    /// the smoothed area [x0, y0, x1, y1); `soft` is undefined outside it.
+    fn smooth(&self, corners: &[V2; 4], cell_px: f64, soft: &mut Vec<u8>, rows: &mut Vec<u16>) -> [usize; 4] {
+        let (w, h) = (self.w, self.h);
+        let r: usize = if cell_px < 3.9 { 1 } else if cell_px < 5.2 { 2 } else { 3 };
+        const KERNELS: [&[u16]; 3] = [&[1, 2, 1], &[1, 4, 6, 4, 1], &[1, 6, 15, 20, 15, 6, 1]];
+        let kernel = KERNELS[r - 1];
+        let (mut fx0, mut fy0, mut fx1, mut fy1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for c in corners {
+            fx0 = fx0.min(c[0]);
+            fx1 = fx1.max(c[0]);
+            fy0 = fy0.min(c[1]);
+            fy1 = fy1.max(c[1]);
+        }
+        // the finder centres are 3.5 cells inside the code; a little more for the bilinear tap
+        let m = 5.0 * cell_px + 2.0;
+        let x0 = ((fx0 - m).max(0.0) as usize).clamp(r, w - r - 1);
+        let y0 = ((fy0 - m).max(0.0) as usize).clamp(r, h - r - 1);
+        let x1 = ((fx1 + m).max(0.0) as usize + 1).clamp(x0 + 1, w - r);
+        let y1 = ((fy1 + m).max(0.0) as usize + 1).clamp(y0 + 1, h - r);
+        if soft.len() < w * h {
+            soft.resize(w * h, 0);
+        }
+        let n = x1 - x0;
+        // Along each row, then down the columns. The rows filtered along are kept in a ring
+        // of 2r + 1 (all that the pass down needs), so the work stays in the cache.
+        let taps = 2 * r + 1;
+        if rows.len() < taps * n {
+            rows.resize(taps * n, 0);
+        }
+        let along = |y: usize, out: &mut [u16]| {
+            out.fill(0);
+            for (k, &c) in kernel.iter().enumerate() {
+                let src = &self.luma[y * w + x0 + k - r..y * w + x0 + k - r + n];
+                for (o, &v) in out.iter_mut().zip(src) {
+                    *o += c * v as u16;
+                }
+            }
+        };
+        for y in y0 - r..y0 + r {
+            along(y, &mut rows[(y % taps) * n..(y % taps + 1) * n]);
+        }
+        let shift = 4 * r as u32;
+        let half = 1u32 << (shift - 1);
+        let mut acc = vec![0u32; n];
+        for y in y0..y1 {
+            along(y + r, &mut rows[((y + r) % taps) * n..((y + r) % taps + 1) * n]);
+            acc.fill(half);
+            for (k, &c) in kernel.iter().enumerate() {
+                let row = (y + k - r) % taps;
+                for (a, &v) in acc.iter_mut().zip(&rows[row * n..(row + 1) * n]) {
+                    *a += c as u32 * v as u32;
+                }
+            }
+            for (o, &a) in soft[y * w + x0..y * w + x1].iter_mut().zip(&acc) {
+                *o = (a >> shift) as u8;
+            }
+        }
+        [x0, y0, x1, y1]
+    }
+
+    /// [`Camera::sample`] for every data cell of the grid, into `out[channel][slot]`. The cells
+    /// are visited row by row within each lattice quad: positions and references then come
+    /// from one step to the next by additions.
+    fn sample_all(&self, soft: &[u8], area: [usize; 4], grid: &Grid, at: &SampleAt, out: &mut [Vec<f32>; 3]) {
+        let w = self.w;
+        let [x0, y0, x1, y1] = area;
+        let (lx0, lx1) = (x0 as f32, (x1 - 1) as f32 - 0.01);
+        let (ly0, ly1) = (y0 as f32, (y1 - 1) as f32 - 0.01);
+        let (cx1, cy1) = (self.cw as f32 - 1.01, self.ch as f32 - 1.01);
+        let (cw, cbcr) = (self.cw, self.cbcr);
+        let (xg, yg) = (grid.layout.x, grid.layout.y);
+        let nx = at.nx;
+        let ref_at = |k: usize| -> [f32; 6] {
+            let r = &at.refs[k * 6..k * 6 + 6];
+            [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32, r[4] as f32, r[5] as f32]
+        };
+        let [out_r, out_g, out_b] = out;
+        let wanted = out_r.len();
+        let mut cy = 0;
+        while cy < yg {
+            let qj = at.qj_of[cy];
+            let fy = at.fy_of[cy] as f32;
+            let slots = &grid.cell_slot[cy * xg..(cy + 1) * xg];
+            let gy = cy as f64 + 0.5;
+            let mut cx = 0;
+            while cx < xg {
+                // the run of columns in this lattice quad
+                let qi = at.qi_of[cx];
+                let mut end = cx + 1;
+                while end < xg && at.qi_of[end] == qi {
+                    end += 1;
+                }
+                let hq = &at.qh[qj * (nx - 1) + qi];
+                let gx = cx as f64 + 0.5;
+                // numerators and denominator of the quad's homography, stepped along the row
+                let (mut xn, mut yn, mut wn) = (
+                    (hq[0] * gx + hq[1] * gy + hq[2]) as f32,
+                    (hq[3] * gx + hq[4] * gy + hq[5]) as f32,
+                    (hq[6] * gx + hq[7] * gy + hq[8]) as f32,
+                );
+                let (dx, dy, dw) = (hq[0] as f32, hq[3] as f32, hq[6] as f32);
+                // white and ink at the row's two ends of the quad
+                let k00 = qj * nx + qi;
+                let (r00, r10, r01, r11) = (ref_at(k00), ref_at(k00 + 1), ref_at(k00 + nx), ref_at(k00 + nx + 1));
+                let mut left = [0f32; 6];
+                let mut span = [0f32; 6];
+                for o in 0..6 {
+                    left[o] = r00[o] + (r01[o] - r00[o]) * fy;
+                    span[o] = r10[o] + (r11[o] - r10[o]) * fy - left[o];
+                }
+                for c in cx..end {
+                    let slot = slots[c];
+                    let iw = 1.0 / wn;
+                    let (px, py) = (xn * iw, yn * iw);
+                    xn += dx;
+                    yn += dy;
+                    wn += dw;
+                    if slot as usize >= wanted {
+                        continue; // not a data cell, or filler after the last codeword
+                    }
+                    let x = (px - 0.5).clamp(lx0, lx1);
+                    let y = (py - 0.5).clamp(ly0, ly1);
+                    let (ix, iy) = (x as usize, y as usize);
+                    let (ax, ay) = (x - ix as f32, y - iy as f32);
+                    let k = iy * w + ix;
+                    let (top, bot) = (&soft[k..k + 2], &soft[k + w..k + w + 2]);
+                    let a = top[0] as f32 + (top[1] as f32 - top[0] as f32) * ax;
+                    let b = bot[0] as f32 + (bot[1] as f32 - bot[0] as f32) * ax;
+                    let yv = a + (b - a) * ay;
+                    let x = ((px - 0.5) * 0.5 - 0.25).clamp(0.0, cx1);
+                    let y = ((py - 0.5) * 0.5 - 0.25).clamp(0.0, cy1);
+                    let (jx, jy) = (x as usize, y as usize);
+                    let (bx, by) = (x - jx as f32, y - jy as f32);
+                    let k = (jy * cw + jx) * 2;
+                    let (top, bot) = (&cbcr[k..k + 4], &cbcr[k + cw * 2..k + cw * 2 + 4]);
+                    let lerp2 = |o: usize| {
+                        let a = top[o] as f32 + (top[o + 2] as f32 - top[o] as f32) * bx;
+                        let b = bot[o] as f32 + (bot[o + 2] as f32 - bot[o] as f32) * bx;
+                        a + (b - a) * by - 128.0
+                    };
+                    let (cb, cr) = (lerp2(0), lerp2(1));
+                    let rgb = [(yv + 1.402 * cr).clamp(0.0, 255.0), (yv - 0.344_136 * cb - 0.714_136 * cr).clamp(0.0, 255.0), (yv + 1.772 * cb).clamp(0.0, 255.0)];
+                    let fx = at.fx_of[c] as f32;
+                    let mut rf = [0f32; 6];
+                    for o in 0..6 {
+                        rf[o] = left[o] + span[o] * fx;
+                    }
+                    let s = slot as usize;
+                    out_r[s] = (rgb[0] - rf[3]) / (rf[0] - rf[3]).max(12.0);
+                    out_g[s] = (rgb[1] - rf[4]) / (rf[1] - rf[4]).max(12.0);
+                    out_b[s] = (rgb[2] - rf[5]) / (rf[2] - rf[5]).max(12.0);
+                }
+                cx = end;
+            }
+            cy += 1;
+        }
+    }
+
+    /// Reads every slot's cell: its colour, normalised by the white and ink measured around
+    /// it (0 = ink, 1 = white, per channel), into `out[channel][index in slots]`.
+    fn sample(&self, soft: &[u8], area: [usize; 4], slots: &[usize], at: &SampleAt, out: &mut [Vec<f32>; 3]) {
+        let w = self.w;
+        let [x0, y0, x1, y1] = area;
+        let (lx0, lx1) = (x0 as f64, (x1 - 1) as f64 - 0.001);
+        let (ly0, ly1) = (y0 as f64, (y1 - 1) as f64 - 0.001);
+        let (cx1, cy1) = (self.cw as f64 - 1.001, self.ch as f64 - 1.001);
+        let (cw, cbcr) = (self.cw, self.cbcr);
+        let refs: Vec<[f32; 6]> = at.refs.chunks_exact(6).map(|r| [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32, r[4] as f32, r[5] as f32]).collect();
+        let nx = at.nx;
+        let [out_r, out_g, out_b] = out;
+        for (i, &s) in slots.iter().enumerate() {
+            let (cx, cy) = (at.slot_x[s] as usize, at.slot_y[s] as usize);
+            let (qi, qj) = (at.qi_of[cx], at.qj_of[cy]);
+            let hq = &at.qh[qj * (nx - 1) + qi];
+            let (gx, gy) = (cx as f64 + 0.5, cy as f64 + 0.5);
+            let iw = 1.0 / (hq[6] * gx + hq[7] * gy + hq[8]);
+            let px = (hq[0] * gx + hq[1] * gy + hq[2]) * iw;
+            let py = (hq[3] * gx + hq[4] * gy + hq[5]) * iw;
+            // luma: one bilinear tap of the smoothed plane
+            let x = (px - 0.5).clamp(lx0, lx1);
+            let y = (py - 0.5).clamp(ly0, ly1);
+            let (ix, iy) = (x as usize, y as usize);
+            let (ax, ay) = ((x - ix as f64) as f32, (y - iy as f64) as f32);
+            let k = iy * w + ix;
+            let (top, bot) = (&soft[k..k + 2], &soft[k + w..k + w + 2]);
+            let a = top[0] as f32 + (top[1] as f32 - top[0] as f32) * ax;
+            let b = bot[0] as f32 + (bot[1] as f32 - bot[0] as f32) * ax;
+            let yv = a + (b - a) * ay;
+            // chroma: sample (cx, cy) is centred on luma (2cx + 1, 2cy + 1)
+            let x = ((px - 0.5) * 0.5 - 0.25).clamp(0.0, cx1);
+            let y = ((py - 0.5) * 0.5 - 0.25).clamp(0.0, cy1);
+            let (jx, jy) = (x as usize, y as usize);
+            let (bx, by) = ((x - jx as f64) as f32, (y - jy as f64) as f32);
+            let k = (jy * cw + jx) * 2;
+            let (top, bot) = (&cbcr[k..k + 4], &cbcr[k + cw * 2..k + cw * 2 + 4]);
+            let lerp2 = |o: usize| {
+                let a = top[o] as f32 + (top[o + 2] as f32 - top[o] as f32) * bx;
+                let b = bot[o] as f32 + (bot[o + 2] as f32 - bot[o] as f32) * bx;
+                a + (b - a) * by - 128.0
+            };
+            let (cb, cr) = (lerp2(0), lerp2(1));
+            let rgb = [(yv + 1.402 * cr).clamp(0.0, 255.0), (yv - 0.344_136 * cb - 0.714_136 * cr).clamp(0.0, 255.0), (yv + 1.772 * cb).clamp(0.0, 255.0)];
+            // white and ink here, between the four lattice points around the cell
+            let (fx, fy) = (at.fx_of[cx] as f32, at.fy_of[cy] as f32);
+            let k00 = qj * nx + qi;
+            let (r00, r10, r01, r11) = (&refs[k00], &refs[k00 + 1], &refs[k00 + nx], &refs[k00 + nx + 1]);
+            let (w00, w10, w01, w11) = ((1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy);
+            let mut rf = [0f32; 6];
+            for (o, v) in rf.iter_mut().enumerate() {
+                *v = r00[o] * w00 + r10[o] * w10 + r01[o] * w01 + r11[o] * w11;
+            }
+            out_r[i] = (rgb[0] - rf[3]) / (rf[0] - rf[3]).max(12.0);
+            out_g[i] = (rgb[1] - rf[4]) / (rf[1] - rf[4]).max(12.0);
+            out_b[i] = (rgb[2] - rf[5]) / (rf[2] - rf[5]).max(12.0);
+        }
+    }
+}
+
+/// The gain blocks of the classifier: their grid, and where each slot's cell sits among them.
+struct Gains<'a> {
+    gbw: usize,
+    gbh: usize,
+    step_x: usize,
+    step_y: usize,
+    blend_x: &'a [(usize, f64)],
+    blend_y: &'a [(usize, f64)],
+    slot_x: &'a [u16],
+    slot_y: &'a [u16],
+}
+
+/// The camera path's classifier: palette-seeded k-means with a local gain correction, as in
+/// the RGBA path (two rounds, then the final assignment), in single precision over arrays
+/// laid out for the compiler to vectorise. `cells[channel][i]` belongs to slot `slots[i]`.
+/// The camera path's classifier: palette-seeded k-means with a local gain correction, as in
+/// the RGBA path, in single precision over arrays laid out for the compiler to vectorise.
+/// `cells[channel][i]` belongs to slot `slots[i]`.
+///
+/// `warm`: the centres and gains the last capture of this code ended with. Starting from
+/// them, one round does what three do from the palette (measured on phone captures: the same
+/// packets with four colours, a few percent more with eight). Returns this capture's.
+fn classify<const N: usize>(
+    cells: &[Vec<f32>; 3],
+    slots: &[usize],
+    palette: &[f32],
+    g: &Gains,
+    warm: Option<(&[f32], &[[f32; 3]])>,
+    symbols: &mut [u8],
+    conf: &mut [f32],
+) -> (Vec<f32>, Vec<[f32; 3]>) {
+    const GB: usize = 4;
+    let m = slots.len();
+    let nblocks = g.gbw * g.gbh;
+    let warm = warm.filter(|(c, gn)| c.len() == N * 3 && gn.len() == nblocks);
+    let mut cent = [[0f32; 3]; N];
+    for (c, p) in cent.iter_mut().zip(warm.map_or(palette, |w| w.0).chunks_exact(3)) {
+        *c = [p[0], p[1], p[2]];
+    }
+    let [nr, ng, nb] = cells;
+    let (nr, ng, nb) = (&nr[..m], &ng[..m], &nb[..m]);
+    // per cell: its gain block, the first of the four blocks it blends, and the weights
+    let mut block = vec![0u32; m];
+    let mut first = vec![0u32; m];
+    let mut wx = vec![0f32; m];
+    let mut wy = vec![0f32; m];
+    for (i, &s) in slots.iter().enumerate() {
+        let (cx, cy) = (g.slot_x[s] as usize, g.slot_y[s] as usize);
+        block[i] = ((cy / GB) * g.gbw + cx / GB) as u32;
+        let ((ix, ax), (iy, ay)) = (g.blend_x[cx], g.blend_y[cy]);
+        first[i] = (iy * g.gbw + ix) as u32;
+        wx[i] = ax as f32;
+        wy[i] = ay as f32;
+    }
+    let (sx, sy) = (g.step_x, g.step_y);
+    // the cells with the gain of their place taken out
+    let level = |gain: &[[f32; 3]], work: &mut [Vec<f32>; 3]| {
+        let [wr, wg, wb] = work;
+        let (wr, wg, wb) = (&mut wr[..m], &mut wg[..m], &mut wb[..m]);
+        for i in 0..m {
+            let b00 = first[i] as usize;
+            let (g00, g10, g01, g11) = (&gain[b00], &gain[b00 + sx], &gain[b00 + sy], &gain[b00 + sy + sx]);
+            let (ax, ay) = (wx[i], wy[i]);
+            let at = |ch: usize| {
+                let top = g00[ch] + (g10[ch] - g00[ch]) * ax;
+                let bot = g01[ch] + (g11[ch] - g01[ch]) * ax;
+                (top + (bot - top) * ay).max(0.25)
+            };
+            wr[i] = nr[i] / at(0);
+            wg[i] = ng[i] / at(1);
+            wb[i] = nb[i] / at(2);
+        }
+    };
+    let mut work = [nr.to_vec(), ng.to_vec(), nb.to_vec()];
+    if let Some((_, gain)) = warm {
+        level(gain, &mut work);
+    }
+    let mut sym = vec![0u8; m];
+    // nearest centre of each cell (the first of equals); `margin`: how much nearer than the next
+    let assign = |work: &[Vec<f32>; 3], cent: &[[f32; 3]; N], sym: &mut [u8], mut margin: Option<&mut [f32]>| {
+        let (wr, wg, wb) = (&work[0][..m], &work[1][..m], &work[2][..m]);
+        for i in 0..m {
+            let mut dist = [0f32; N];
+            for k in 0..N {
+                let (dr, dg, db) = (wr[i] - cent[k][0], wg[i] - cent[k][1], wb[i] - cent[k][2]);
+                dist[k] = dr * dr + dg * dg + db * db;
+            }
+            let (mut b1, mut bi) = (dist[0], 0u8);
+            for k in 1..N {
+                let nearer = dist[k] < b1;
+                b1 = if nearer { dist[k] } else { b1 };
+                bi = if nearer { k as u8 } else { bi };
+            }
+            sym[i] = bi;
+            if let Some(margin) = margin.as_deref_mut() {
+                let mut b2 = f32::MAX;
+                for k in 0..N {
+                    let next = k as u8 != bi && dist[k] < b2;
+                    b2 = if next { dist[k] } else { b2 };
+                }
+                margin[i] = b2.sqrt() - b1.sqrt();
+            }
+        }
+    };
+    let mut gacc = vec![[0f32; 6]; nblocks];
+    let mut gain = vec![[1f32; 3]; nblocks];
+    let rounds = if warm.is_some() { 1 } else { 2 };
+    for _ in 0..rounds {
+        assign(&work, &cent, &mut sym, None);
+        // the centres move to the mean of their cells
+        let mut sums = [[0f64; 4]; N];
+        for i in 0..m {
+            let s = &mut sums[sym[i] as usize & (N - 1)];
+            s[0] += work[0][i] as f64;
+            s[1] += work[1][i] as f64;
+            s[2] += work[2][i] as f64;
+            s[3] += 1.0;
+        }
+        for (c, s) in cent.iter_mut().zip(&sums) {
+            if s[3] >= 8.0 {
+                *c = [(s[0] / s[3]) as f32, (s[1] / s[3]) as f32, (s[2] / s[3]) as f32];
+            }
+        }
+        // the gain of each block: the least-squares scale from the centres to its cells
+        gacc.iter_mut().for_each(|a| *a = [0.0; 6]);
+        for i in 0..m {
+            let c = &cent[sym[i] as usize & (N - 1)];
+            let a = &mut gacc[block[i] as usize];
+            a[0] += nr[i] * c[0];
+            a[1] += ng[i] * c[1];
+            a[2] += nb[i] * c[2];
+            a[3] += c[0] * c[0];
+            a[4] += c[1] * c[1];
+            a[5] += c[2] * c[2];
+        }
+        let lam = 0.6;
+        for (o, a) in gain.iter_mut().zip(&gacc) {
+            *o = [(a[0] + lam) / (a[3] + lam), (a[1] + lam) / (a[4] + lam), (a[2] + lam) / (a[5] + lam)];
+        }
+        level(&gain, &mut work);
+    }
+    let mut margin = vec![0f32; m];
+    assign(&work, &cent, &mut sym, Some(&mut margin));
+    for (i, &s) in slots.iter().enumerate() {
+        symbols[s] = sym[i];
+        conf[s] = margin[i];
+    }
+    (cent.iter().flatten().copied().collect(), gain)
 }
 
 fn add_candidate(cands: &mut Vec<Cand>, x: f64, y: f64, m: f64, corner: bool) {

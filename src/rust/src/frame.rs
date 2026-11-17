@@ -215,12 +215,37 @@ pub fn decode_codewords(
     count: usize,
     skip: &[bool],
 ) -> Vec<Codeword> {
+    decode_codewords_with(layout, mode, n, nsym, symbols, conf, count, skip, false)
+}
+
+/// A cell this close to two colours is as good as unread.
+const UNSURE: f32 = 0.1;
+
+/// [`decode_codewords`]. With `triage`, a codeword in which more than a sixth of the cells
+/// are unsure gets one attempt and no retries with erasures. Such a codeword lies where the
+/// screen was changing frames during the exposure: on phone captures of 60 frames a second,
+/// every codeword that decoded had fewer than an eighth of its cells unsure, and half of
+/// those that failed had more than a sixth. The retries are a third of the decoding work.
+pub fn decode_codewords_with(
+    layout: &Layout,
+    mode: usize,
+    n: usize,
+    nsym: usize,
+    symbols: &[u8],
+    conf: &[f32],
+    count: usize,
+    skip: &[bool],
+    triage: bool,
+) -> Vec<Codeword> {
     let bpc = MODES[mode].bpc as usize;
     let mask = (1u8 << bpc) - 1;
     let cpc = cells_per_codeword(n, bpc as u32);
     let mut out = Vec::with_capacity(count);
     let mut cw = vec![0u8; n];
-    let mut byte_conf = vec![0f32; n];
+    let mut work = vec![0u8; n];
+    let mut idx: Vec<usize> = Vec::with_capacity(n);
+    // one spare byte: the last cell's unused bits fall into it
+    let mut byte_conf = vec![0f32; n + 1];
     for j in 0..count {
         if skip.get(j).copied().unwrap_or(false) {
             out.push(Codeword { index: j, ok: false, skipped: true, corrected: 0, bytes: None });
@@ -228,39 +253,52 @@ pub fn decode_codewords(
         }
         cw.fill(0);
         byte_conf.fill(f32::MAX);
-        let mut bit_pos = 0usize;
-        for c in 0..cpc {
-            let slot = j * cpc + c;
-            let sym = (symbols[slot] ^ layout.whiten[slot]) & mask;
-            let cf = conf[slot];
-            for b in (0..bpc).rev() {
-                let byte = bit_pos >> 3;
+        // the cells' bits in a row, most significant first; a byte is as sure as the least
+        // sure cell with a bit in it
+        let (mut acc, mut held, mut byte) = (0u32, 0usize, 0usize);
+        let mut unsure = 0usize;
+        let cells = j * cpc..(j + 1) * cpc;
+        for ((&raw, &white), &cf) in symbols[cells.clone()].iter().zip(&layout.whiten[cells.clone()]).zip(&conf[cells]) {
+            acc = (acc << bpc) | ((raw ^ white) & mask) as u32;
+            held += bpc;
+            unsure += (cf < UNSURE) as usize;
+            // the byte these bits start in, and the next when they run over
+            if cf < byte_conf[byte] {
+                byte_conf[byte] = cf;
+            }
+            if held >= 8 {
+                held -= 8;
                 if byte < n {
-                    if (sym >> b) & 1 != 0 {
-                        cw[byte] |= 0x80 >> (bit_pos & 7);
-                    }
-                    if cf < byte_conf[byte] {
-                        byte_conf[byte] = cf;
-                    }
+                    cw[byte] = (acc >> held) as u8;
                 }
-                bit_pos += 1;
+                byte += 1;
+                if held > 0 && byte <= n && cf < byte_conf[byte] {
+                    byte_conf[byte] = cf;
+                }
             }
         }
-        let mut work = cw.clone();
-        let mut res = rs::decode(&mut work, nsym, &[]);
-        if res.is_none() {
-            // retry with the least confident bytes as erasures; keep >= nsym/2 redundancy
-            let mut idx: Vec<usize> = (0..n).collect();
-            idx.sort_by(|&a, &b| byte_conf[a].partial_cmp(&byte_conf[b]).unwrap_or(std::cmp::Ordering::Equal));
-            for f in [nsym >> 2, nsym >> 1] {
-                if f == 0 {
-                    continue;
-                }
-                let mut w2 = cw.clone();
-                if let Some(r2) = rs::decode(&mut w2, nsym, &idx[..f]) {
-                    res = Some(r2);
-                    work = w2;
-                    break;
+        if held > 0 && byte < n {
+            cw[byte] = (acc << (8 - held)) as u8;
+        }
+        // the syndromes are worked out once; every attempt starts from them
+        work.copy_from_slice(&cw);
+        let mut res = Some(0);
+        if let Some(syn) = rs::syndromes(&cw, nsym) {
+            res = rs::correct(&mut work, nsym, &syn, &[]);
+            if res.is_none() && !(triage && 6 * unsure > cpc) {
+                // retry with the least confident bytes as erasures; keep >= nsym/2 redundancy
+                idx.clear();
+                idx.extend(0..n);
+                idx.sort_by(|&a, &b| byte_conf[a].partial_cmp(&byte_conf[b]).unwrap_or(std::cmp::Ordering::Equal));
+                for f in [nsym >> 2, nsym >> 1] {
+                    if f == 0 {
+                        continue;
+                    }
+                    work.copy_from_slice(&cw);
+                    if let Some(r2) = rs::correct(&mut work, nsym, &syn, &idx[..f]) {
+                        res = Some(r2);
+                        break;
+                    }
                 }
             }
         }
