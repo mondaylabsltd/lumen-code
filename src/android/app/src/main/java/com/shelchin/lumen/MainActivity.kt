@@ -38,6 +38,12 @@ class MainActivity : ComponentActivity() {
         onImage?.invoke(uri)
         onImage = null
     }
+    // a picture or a video from the photo library, to send
+    private var onMedia: ((Uri?) -> Unit)? = null
+    private val pickAnyMedia = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        onMedia?.invoke(uri)
+        onMedia = null
+    }
     private var onCreated: ((Uri?) -> Unit)? = null
     private val createDocument = registerForActivityResult(CreateDocument()) { uri ->
         onCreated?.invoke(uri)
@@ -102,6 +108,11 @@ class MainActivity : ComponentActivity() {
     fun pickFile(then: (Uri?) -> Unit) {
         onPicked = then
         openDocument.launch(arrayOf("*/*"))
+    }
+
+    fun pickMedia(then: (Uri?) -> Unit) {
+        onMedia = then
+        pickAnyMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
     }
 
     fun pickImage(then: (Uri?) -> Unit) {

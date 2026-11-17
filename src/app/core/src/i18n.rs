@@ -54,6 +54,7 @@ const DICT: &[(&str, &str, &str)] = &[
     ("dropTitle", "发送文件", "Send a file"),
     ("dropDesc", "拖入文件，或点击选择。", "Drop a file here, or click to choose."),
     ("choose", "选择文件", "Choose file"),
+    ("chooseMedia", "从相册选择", "Choose from Photos"),
     ("sendText", "发送文本", "Send text"),
     ("dropHint", "调高屏幕亮度，接收端正对屏幕。", "Turn the brightness up; keep the receiver square to the screen."),
     ("flashWarn", "码每秒最多闪烁 {n} 次，对闪光敏感的人请勿注视。", "The code flashes up to {n} times a second. If flashing light affects you, don’t look at it."),

@@ -172,6 +172,7 @@ enum Ev {
     static func sourceTab(_ t: String) -> [String: Any] { ["type": "source_tab", "tab": t] }
     static func textChanged(_ t: String) -> [String: Any] { ["type": "text_changed", "text": t] }
     static let pickFile: [String: Any] = ["type": "pick_file"]
+    static let pickMedia: [String: Any] = ["type": "pick_media"]
     static let sendText: [String: Any] = ["type": "send_text"]
     static func density(_ v: String) -> [String: Any] { ["type": "set_density", "value": v] }
     static func mode(_ v: Int) -> [String: Any] { ["type": "set_mode", "value": v] }

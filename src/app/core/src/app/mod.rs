@@ -280,6 +280,8 @@ pub enum Event {
     SourceTab { tab: SourceTab },
     TextChanged { text: String },
     PickFile,
+    /// Choose a picture or a video from the photo library to send (phones).
+    PickMedia,
     SendText,
     SetDensity { value: Density },
     SetMode { value: u8 },
@@ -640,6 +642,7 @@ fn update(event: Event, model: &mut Model) -> Cmd {
             Command::done()
         }
         Event::PickFile => Command::request_from_shell(ShellOp::PickFile).then_send(move |out| Event::Finished { action: FileAction::Pick, out }),
+        Event::PickMedia => Command::request_from_shell(ShellOp::PickMedia).then_send(move |out| Event::Finished { action: FileAction::Pick, out }),
         Event::SendText => {
             if model.send.text.is_empty() || model.send.phase != SendPhase::Pick {
                 return Command::done();

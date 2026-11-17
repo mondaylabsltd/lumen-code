@@ -454,6 +454,8 @@ private fun PickCard(model: AppModel, s: SendVM) {
             Spacer(Modifier.height(24.dp))
             if (s.sourceTab == "file") {
                 Spacer(Modifier.weight(1f))
+                LumenButton(model.t("chooseMedia"), primary = false, modifier = Modifier.fillMaxWidth().height(48.dp)) { model.dispatch(Ev.pickMedia) }
+                Spacer(Modifier.height(10.dp))
                 LumenButton(model.t("choose"), primary = true, modifier = Modifier.fillMaxWidth().height(48.dp)) { model.dispatch(Ev.pickFile) }
             } else {
                 val shape = RoundedCornerShape(14.dp)

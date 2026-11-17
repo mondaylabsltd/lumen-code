@@ -55,6 +55,10 @@ pub enum ShellOp {
     CameraExposure { max_us: u32 },
     /// Show a file picker; the chosen file goes to the runtime's `load_file`.
     PickFile,
+    /// Show the photo library's picker (pictures and videos); what is chosen goes to the
+    /// runtime's `load_file` as it is, like a picked file. A phone keeps its pictures there,
+    /// not among its files.
+    PickMedia,
     /// Show an image picker; the decoded image goes to the runtime's `scan_image`.
     PickImage,
     /// Save / share / open the received file (bytes from the runtime's `received_bytes`).
@@ -76,6 +80,7 @@ impl ShellOp {
             ShellOp::LoadPrefs
                 | ShellOp::CameraStart { .. }
                 | ShellOp::PickFile
+                | ShellOp::PickMedia
                 | ShellOp::PickImage
                 | ShellOp::SaveFile { .. }
                 | ShellOp::ShareFile { .. }

@@ -280,7 +280,7 @@ impl Root {
                 }
             }
             ShellOp::CameraZoom { .. } | ShellOp::CameraMode { .. } | ShellOp::CameraExposure { .. } => {}
-            ShellOp::PickFile => {
+            ShellOp::PickFile | ShellOp::PickMedia => {
                 let paths = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: None });
                 cx.spawn(async move |_, _| {
                     let picked = paths.await.ok().and_then(|r| r.ok()).flatten().and_then(|p| p.into_iter().next());

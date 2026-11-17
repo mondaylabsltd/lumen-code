@@ -310,9 +310,12 @@ class AppModel(private val activity: MainActivity) {
             "camera_zoom" -> camera.zoom(op.level ?: 1f)
             "camera_mode" -> camera.setMode(op.fps ?: 30) // no 4K: the camera answers uhd false
             "camera_exposure" -> camera.setExposureCap(op.maxUs ?: 2500)
-            "pick_file" -> {
+            "pick_file", "pick_media" -> {
                 val id = r.id
-                activity.pickFile { uri ->
+                // the same loading either way: a file from the documents, or a picture or a
+                // video from the photo library
+                val pick: ((android.net.Uri?) -> Unit) -> Unit = if (op.type == "pick_media") activity::pickMedia else activity::pickFile
+                pick { uri ->
                     if (uri == null) {
                         answer(id, finished(false, cancelled = true))
                     } else {

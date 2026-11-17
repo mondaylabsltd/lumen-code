@@ -1,5 +1,6 @@
 import LumenCore
 import PhotosUI
+import UniformTypeIdentifiers
 import SwiftUI
 import UIKit
 
@@ -15,6 +16,9 @@ final class AppModel {
     var showFileImporter = false
     var showPhotoPicker = false
     var photoItem: PhotosPickerItem?
+    // a picture or a video from the photo library, to send
+    var showMediaPicker = false
+    var mediaItem: PhotosPickerItem?
 
     @ObservationIgnored let core: LumenCore
     @ObservationIgnored let camera: CameraController
@@ -24,6 +28,7 @@ final class AppModel {
     @ObservationIgnored private var labelsLang = ""
     @ObservationIgnored private var pendingPick: UInt64 = 0
     @ObservationIgnored private var pendingImage: UInt64 = 0
+    @ObservationIgnored private var pendingMedia: UInt64 = 0
 
     init() {
         let listener = Listener()
@@ -130,6 +135,10 @@ final class AppModel {
         case "pick_file":
             pendingPick = r.id
             showFileImporter = true
+        case "pick_media":
+            pendingMedia = r.id
+            mediaItem = nil
+            showMediaPicker = true
         case "pick_image":
             pendingImage = r.id
             photoItem = nil
@@ -186,6 +195,31 @@ final class AppModel {
     func fileImportCancelled() {
         answer(pendingPick, Self.finished(false, cancelled: true))
         pendingPick = 0
+    }
+
+    /// The photo library's picker closed: what was chosen is sent as it is stored (no
+    /// conversion: a HEIC picture stays the smaller file it is), under a name made from the
+    /// time, since the library hands out no file names without access to all of it.
+    func mediaPicked() {
+        let id = pendingMedia
+        pendingMedia = 0
+        guard let item = mediaItem else {
+            answer(id, Self.finished(false, cancelled: true))
+            return
+        }
+        mediaItem = nil
+        let core = self.core
+        let type = item.supportedContentTypes.first
+        let video = type?.conforms(to: .movie) ?? false
+        let ext = type?.preferredFilenameExtension ?? (video ? "mov" : "jpg")
+        let stamp = DateFormatter()
+        stamp.dateFormat = "yyyyMMdd-HHmmss"
+        let name = "\(video ? "video" : "photo")-\(stamp.string(from: Date())).\(ext)"
+        Task.detached(priority: .userInitiated) {
+            let data = try? await item.loadTransferable(type: Data.self)
+            if let data { core.loadFile(name: name, data: data) }
+            await MainActor.run { [weak self] in self?.answer(id, Self.finished(data != nil)) }
+        }
     }
 
     func photoPicked() {

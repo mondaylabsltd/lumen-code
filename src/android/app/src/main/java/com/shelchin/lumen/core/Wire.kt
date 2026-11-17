@@ -162,6 +162,7 @@ object Ev {
     fun sourceTab(t: String) = buildJsonObject { put("type", "source_tab"); put("tab", t) }
     fun textChanged(t: String) = buildJsonObject { put("type", "text_changed"); put("text", t) }
     val pickFile = e("pick_file")
+    val pickMedia = e("pick_media")
     val sendText = e("send_text")
     fun density(v: String) = buildJsonObject { put("type", "set_density"); put("value", v) }
     fun mode(v: Int) = buildJsonObject { put("type", "set_mode"); put("value", v) }

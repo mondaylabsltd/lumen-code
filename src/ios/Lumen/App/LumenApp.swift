@@ -47,5 +47,9 @@ struct RootView: View {
         .onChange(of: model.showPhotoPicker) { _, shown in
             if !shown { model.photoPicked() }
         }
+        .photosPicker(isPresented: $model.showMediaPicker, selection: $model.mediaItem, matching: .any(of: [.images, .videos]), preferredItemEncoding: .current)
+        .onChange(of: model.showMediaPicker) { _, shown in
+            if !shown { model.mediaPicked() }
+        }
     }
 }

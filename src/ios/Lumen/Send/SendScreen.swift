@@ -161,6 +161,8 @@ private struct PickCard: View {
 
                 if send.sourceTab == "file" {
                     Spacer(minLength: 0)
+                    Button(model.t("chooseMedia")) { model.dispatch(Ev.pickMedia) }.buttonStyle(LumenButtonStyle(primary: false, fill: true, height: 48))
+                        .padding(.bottom, 10)
                     Button(model.t("choose")) { model.dispatch(Ev.pickFile) }.buttonStyle(LumenButtonStyle(primary: true, fill: true, height: 48))
                 } else {
                     ZStack(alignment: .topLeading) {
