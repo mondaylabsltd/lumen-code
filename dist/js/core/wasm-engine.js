@@ -2,7 +2,7 @@
 // this file wraps its C ABI in classes with the same shape as the JS Scanner / Sender /
 // Receiver, so the app can switch engines freely.
 
-import { makeLayout, codewordsPerFrame } from './layout.js?v=6318356ea1';
+import { makeLayout, codewordsPerFrame } from './layout.js?v=e1f4d8d604';
 
 let X = null; // wasm exports
 
@@ -53,9 +53,11 @@ export class WasmScanner {
   }
 
   // img: { width, height, data } (RGBA), or a camera frame in its own planes:
-  // { width, height, planes: { data, format: 'NV12' | 'I420', layout, crop } }, with layout as
-  // VideoFrame.copyTo() returns it ([{ offset, stride }, …]) and crop = { x, y, w, h } (even
-  // numbers) the part of the frame to scan; width and height are then the crop's.
+  // { width, height, planes: { data, format: 'NV12' | 'I420', layout, crop, chroma } }, with
+  // layout as VideoFrame.copyTo() returns it ([{ offset, stride }, …]) and crop = { x, y, w, h }
+  // (even numbers) the part of the frame to scan; width and height are then the crop's.
+  // chroma: 'left' when the chroma samples lie level with the even luma columns (Safari's
+  // frames); otherwise they are taken as centred on their four luma pixels (Chrome's on Android).
   scan(img, opts = {}) {
     const { width: w, height: h } = img;
     let p;
@@ -115,6 +117,7 @@ export class WasmScanner {
       new Float64Array(X.memory.buffer, hp, 8).set(opts.hint.corners.flat());
       X.lm_scanner_hint(this.h, hp, opts.hint.cellPx);
     }
+    if (img.planes && X.lm_scanner_chroma) X.lm_scanner_chroma(this.h, img.planes.chroma === 'left' ? 1 : 0);
     const rp = img.planes ? X.lm_scan_yuv(this.h, p, cp, w, h, sp, sl) : camera ? X.lm_scan_camera(this.h, p, w, h, sp, sl) : X.lm_scan(this.h, p, w, h, sp, sl);
     const dv = view();
     let o = rp;

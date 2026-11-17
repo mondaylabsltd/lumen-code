@@ -10,7 +10,7 @@
 //  │ finder │                                    │ corner  │   corner: 7×7, light ring, 2-wide dark ring, light dot
 //  └────────┴────────────────────────────────────┴─────────┘
 
-import { crc16bits, mix32 } from './util.js?v=6318356ea1';
+import { crc16bits, mix32 } from './util.js?v=e1f4d8d604';
 
 export const VERSION = 1;
 export const MIN_DIM = 40;

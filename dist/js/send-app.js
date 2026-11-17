@@ -1,9 +1,9 @@
-import { applyI18n, t } from './i18n.js?v=6318356ea1';
-import { BUILD, buildText } from './version.js?v=6318356ea1';
-import { Sender, preparePayload } from './core/transfer.js?v=6318356ea1';
-import { Renderer } from './core/render.js?v=6318356ea1';
-import { MIN_DIM, MAX_DIM, MODES } from './core/layout.js?v=6318356ea1';
-import { loadWasm, WasmSender } from './core/wasm-engine.js?v=6318356ea1';
+import { applyI18n, t } from './i18n.js?v=e1f4d8d604';
+import { BUILD, buildText } from './version.js?v=e1f4d8d604';
+import { Sender, preparePayload } from './core/transfer.js?v=e1f4d8d604';
+import { Renderer } from './core/render.js?v=e1f4d8d604';
+import { MIN_DIM, MAX_DIM, MODES } from './core/layout.js?v=e1f4d8d604';
+import { loadWasm, WasmSender } from './core/wasm-engine.js?v=e1f4d8d604';
 
 const $ = (id) => document.getElementById(id);
 applyI18n();
