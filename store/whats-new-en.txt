@@ -1,8 +1,7 @@
-Faster receiving.
+Clearer guidance while receiving.
 
-- Every camera frame is scanned, each in about a quarter of the time.
-- A warm phone keeps its rate.
-- Held on its side, the status and progress panel turn with the phone.
-- The sender's frame rate goes up to the screen's refresh rate.
+- When the cells of a code are too small for the camera, the app says to move closer, or to lower the density on the sender.
+- Advice on the sender's frame rate follows what the camera can keep up with.
+- Android: the outline of the code follows a phone held on its side, and the focus is set once on the code and held.
 
 Compatible with Protocol 1.0 and earlier 1.0 apps.

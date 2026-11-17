@@ -1,17 +1,16 @@
 ## Lumen Code <version>
 
-Faster receiving. The Protocol 1.0 wire format is unchanged, and this version transfers with every earlier 1.0 version.
+The website receives several times faster and now works in Chrome on Android; the apps say what to do when a code does not read. The Protocol 1.0 wire format is unchanged, and this version transfers with every earlier 1.0 version.
 
-- From a 60 Hz monitor at 60 FPS to an iPhone 15 Pro, measured: 844 KB/s at density High (470–730 KB/s before) and 1.2 MB/s at density Max. Conditions and the other figures are in the [performance guide](https://github.com/mondaylabsltd/lumen-code/blob/main/docs/guide/04-performance.md).
-- The receiver scans every camera frame, each scan in about a quarter of the time, limits the exposure time, and keeps its rate on a warm phone.
-- The frame rate goes up to the screen's refresh rate; 60 is no longer a fixed top. The fastest transfer is at half the receiving camera's rate, and the receiver says so when the sender plays too fast.
-- A new desktop install starts at 60 FPS on the densest grid, four colours. The code must fill most of the receiving camera's picture; settings you chose are kept.
-- Phones: while scanning, the status and the panel turn with a phone held on its side. The panel is then one line over the bar and the scan frame is the screen's four corners, the same on iPhone, Android and the website.
-- Settings: each label sits next to its own control, and the row starts at the left edge.
+- Website in Safari on an iPhone: camera frames are read without a canvas and scanned on the path of the apps. Measured on an iPhone 15 Pro facing a 60 Hz monitor: about 100 KB/s before, 399 KB/s on average with the sender at 20 FPS (248 KB/s at 30 FPS).
+- Website in Chrome on Android: the page holds a short exposure while a code is in view. Measured on a Galaxy S22: nothing decoded before, 295 KB/s on average now.
+- Advice while receiving. The sender's frame rate a camera can follow is 20 FPS for a camera at 30 and 60 for one at 120, and the receiver says so. When a code is captured but its cells are too small for the camera, it says to move closer, or to lower the density at the sender when the code already fills the picture.
+- Desktop receiver: looks for a code on every frame; asks for 1080p first on every system; says so when another program holds the camera.
+- Android app: the outline of the code follows a phone held on its side, and the focus is set once on the code and held.
 
-1.1.1 follows 1.1.0 by an hour with the last two points completed: 1.1.0 had the compact panel on iPhone only, and its settings labels were right-aligned.
+What a camera needs differs: an iPhone 15 Pro or a Galaxy S22 reads cells of 3.5 camera pixels, a Redmi K40 and a MacBook's built-in camera need 6 to 7. Browsers open phone cameras at 1080p and 30 frames a second, so the website receives at about half the rate of the apps or less. Conditions and all figures are in the [performance guide](https://github.com/mondaylabsltd/lumen-code/blob/main/docs/guide/04-performance.md).
 
-Android: the release build was installed on a Redmi K40 (start, receive screen, camera, the layout on its side). Its receive rate was not measured.
+Not measured for this version: the Galaxy S22 with the Android app, and Windows and Linux with a camera.
 
 ## Desktop downloads
 
