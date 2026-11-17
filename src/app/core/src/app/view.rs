@@ -412,6 +412,12 @@ fn recv_view(m: &Model) -> RecvView {
         (t(l, "tipHot").to_string(), false)
     } else if st.is_some_and(|s| s.heat_limited) {
         (t(l, "tipHotScan").to_string(), false)
+    } else if let Some(s) = st.filter(|s| s.span_secs > 2.0 && s.cam_fps > 0.0 && s.sender_fps > 0.55 * s.cam_fps && cov_tot > 0 && ok_rate < 0.8) {
+        // Fewer than two captures per frame, and it shows: a screen takes a few milliseconds over
+        // each frame change, and one capture per frame mostly lands in it. Measured from a
+        // 120 Hz laptop screen to a camera at 120: 0.2–0.4 MB/s at 120 fps, 0.77 MB/s at 60.
+        let n = (s.cam_fps / 2.0).round() as u32;
+        (t(l, "tipFpsDown").replace("{cam}", &format!("{:.0}", s.cam_fps)).replace("{n}", &n.to_string()), false)
     } else if let Some(s) = st.filter(|s| s.tearing && s.span_secs > 2.0 && s.cam_fps > 0.0 && s.sender_fps > 0.95 * s.cam_fps) {
         // torn captures: past ~0.8 of the camera's rate, each tear costs more than a frame brings
         let n = (s.cam_fps * 0.8).round() as u32;

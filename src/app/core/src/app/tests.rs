@@ -387,6 +387,24 @@ fn frame_rates_follow_the_hardware() {
     assert_eq!(m.recv.camera.fps, 480);
 }
 
+/// A sender as fast as the camera, decoding badly: the advice is half the camera's rate (two
+/// captures per frame), not a little under it.
+#[test]
+fn a_sender_as_fast_as_the_camera_is_told_to_halve() {
+    use crate::engine::recv::{LiveStats, ScanReport};
+    let now = 10_000.0;
+    let mut m = Model { screen: Screen::Receive, now, ..Model::default() };
+    m.recv.phase = RecvPhase::Scanning;
+    m.recv.found = true;
+    let stats = LiveStats { last_found_at: now - 50.0, cov_ok: 13, cov_tot: 100, cell: 5.5, cell_n: 9, cam_fps: 120.0, sender_fps: 119.0, span_secs: 2.5, tearing: true, ..LiveStats::default() };
+    m.recv.last = Some(ScanReport { at: now - 50.0, ok: true, stats, ..Default::default() });
+    // data is arriving (the warnings for a stalled transfer stay out of the way)
+    m.recv.prog_hist.push_back((now - 2000.0, 10));
+    m.recv.prog_hist.push_back((now - 100.0, 60));
+    let tip = view::view(&m).recv.tip;
+    assert!(tip.contains("120") && tip.contains("60") && !tip.contains("96"), "{tip}");
+}
+
 /// A warm phone keeps the fast capture mode (fair, serious): giving it up is the loss of rate
 /// the person came to avoid. Only the critical level, where the system is about to stop the
 /// camera itself, takes it back to 60.

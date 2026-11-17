@@ -133,6 +133,8 @@ enum DebugScript {
                     model.camera.grab(Int(parts.first ?? "") ?? 6, tag: parts.count > 1 ? parts[1] : "")
                 case "exposure":
                     model.camera.setMaxExposure(us: Int(arg) ?? 0, pin: true)
+                case "binned":
+                    CameraController.allowBinned = arg != "0"
                 case "cammode":
                     // cammode:<fps>[:uhd]
                     let parts = arg.split(separator: ":").map(String.init)

@@ -151,12 +151,14 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     }
 
     /// A 16:9 4:2:0 format of the given width (1920 or 3840) that reaches `fps`: full sensor
-    /// resolution only (binned modes halve the detail a cell needs), full range preferred.
+    /// resolution only, full range preferred. A binned mode keeps the luma sharp but smears
+    /// the colour over neighbouring cells: the iPhone 15 Pro's 240 fps mode (binned only)
+    /// located a code with 5-pixel cells in every capture and decoded no codeword of it.
     private static func format(for dev: AVCaptureDevice, width: Int32, fps: Double) -> AVCaptureDevice.Format? {
         let candidates = dev.formats.filter { f in
             let d = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
             let sub = CMFormatDescriptionGetMediaSubType(f.formatDescription)
-            return d.width == width && d.height * 16 == width * 9 && !f.isVideoBinned
+            return d.width == width && d.height * 16 == width * 9 && (!f.isVideoBinned || Self.allowBinned)
                 && (sub == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange || sub == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
                 && f.videoSupportedFrameRateRanges.contains { $0.maxFrameRate >= fps }
         }
@@ -226,6 +228,9 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         let want = CMTime(value: CMTimeValue(maxExposureUs), timescale: 1_000_000)
         dev.activeMaxExposureDuration = min(max(want, f.minExposureDuration), f.maxExposureDuration)
     }
+
+    /// Test scripts: binned formats count too (the 240 fps modes of some phones are binned only).
+    nonisolated(unsafe) static var allowBinned = false
 
     #if DEBUG
     func grab(_ n: Int, tag: String = "") {
