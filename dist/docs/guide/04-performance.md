@@ -124,6 +124,34 @@ In order of impact:
 
 Tuning order: first secure the success rate (≥ 4.5 pixels per cell, success rate ≥ 90%), then raise the FPS, and only then consider a higher density or C8. When there is headroom, the receiver shows "Spare capacity: you can raise the sender FPS to about N".
 
+### Where the web receiver falls behind the app (Safari, measured 2026-11-17)
+
+Safari on an iPhone 15 Pro, a code on a 60 Hz monitor (420 × 201 cells, 8 colours, 121 codewords a frame, about 4.2 pixels a cell in the capture):
+
+| | Canvas + exact path (before) | Camera planes + camera path (now) |
+|---|---|---|
+| Getting a frame | 20 ms (drawn to a canvas, read back) | 0.5 ms (`VideoFrame.copyTo`) |
+| One scan | 65–90 ms | 12–13 ms |
+| Scans a second | about 15 (half of the camera's 30 dropped) | 30 |
+| Sender at 30 FPS | about 100 KB/s, 30–35% decoded | 248 KB/s on average, 385 at best, 42% decoded |
+| Sender at 20 FPS | — | 399 KB/s on average, 484 at best, 80% decoded |
+
+The app on the same phone receives about 1 MB/s from the same screen (sender at 60 FPS, reported by the maintainer). What is left of the difference comes from the camera the browser gives:
+
+- **Only 30 FPS are usable.** Safari states a top rate of 60 FPS, but offers it at 720p only, and that mode is binned, overexposed and sharpened: every frame is located and no codeword decodes. 1080p stays at 30 FPS; the app uses 120. The web receiver keeps a faster mode only if it has at least 1080 lines and still decodes.
+- **No exposure control.** Safari's camera capabilities hold no exposure setting. A capture whose exposure spans a frame change is a blend of two frames and does not decode. With sender and camera both at 30 FPS, several captures in a row are clean and then several are almost wholly lost (the phase between the two clocks drifts slowly): under half decodes on average.
+- **So the sender has to be slower than the camera**: a frame must stay up for one capture period plus the time a frame change smears a capture, and is then captured clean at least once. For a camera at 30 FPS that is 20 FPS (table above), for a camera at 120 it is 60. The receiver advises the slower rate when the sender is faster and what decodes on average is less than the slower rate would bring; an OLED phone sending at 30 FPS decodes 68% on average, 20 brings nothing there, and nothing is advised.
+- **Cells need about 4 pixels**: at 3.5–3.8 pixels 0–3% decodes, at 4.1 pixels 45%. A 1080p capture is 1920 pixels wide, so a code of 420 columns has to fill nine tenths of it; with smaller cells the receiver advises to move closer or lower the density.
+
+How the web reads the picture now:
+
+- Where the browser has WebCodecs, `new VideoFrame(video)` gives the camera's own Y'CbCr planes (NV12 in Safari). Only the part with the code is copied into the WASM module, which takes the camera path of the apps (`lm_scan_yuv`). Any format other than NV12 or I420 falls back to the canvas.
+- In WASM the camera path reads cell by cell: the smoothing kernel is worked out at each cell's centre, and the luma plane is not filtered whole. Filtering the whole plane is cheap only with vector instructions, which WASM lacks by default, and iOS checks every memory access; together with the colour conversion it was two fifths of a scan.
+- The four corners of the last scan go with the next frame, and the finders are looked for near them first.
+- Chroma siting: Safari's NV12 has its chroma level with the even luma columns (as video has it). Read as centred, three tenths fewer codewords decode (24 against 34 on one frame). The apps' camera path reads it as centred for now; to be checked on device captures.
+
+Chrome (Android included) has not been measured. Chrome on Android offers manual exposure, which Safari does not; it is not used yet.
+
 ## 4.6 Measured cost of each stage
 
 Method: `node test/bench.js` (JavaScript, Node 22) and `cargo run --release --example measure -- bench` in `src/rust` (Rust, native). Each value is the mean of many repetitions after one warm-up run. Machine: Apple M2 Pro, macOS 26.5. T = 200 bytes; RS(255, 215) is the default codeword of a large grid.
