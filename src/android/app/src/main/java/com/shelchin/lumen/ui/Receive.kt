@@ -126,13 +126,17 @@ fun ReceiveScreen(model: AppModel, v: ViewModel) {
     }
 }
 
-/** The way home and, while scanning, the status (clear of the corners that hold the scan frame). */
+/**
+ * The way home and, while scanning, the status. On a wide, low screen (a phone on its side) the
+ * bar keeps clear of the corners, which hold the scan frame, and carries the camera tools at
+ * its end: there is no room for them above the panel.
+ */
 @Composable
 private fun TopBar(model: AppModel, r: RecvVM) {
-    BoxWithConstraints(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
-        val side = if (r.phase == "scanning" && maxWidth > maxHeight) 48.dp else 10.dp
+    BoxWithConstraints(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing)) {
+        val wide = r.phase == "scanning" && maxWidth > maxHeight
         Row(
-            Modifier.padding(horizontal = side, vertical = 8.dp),
+            Modifier.fillMaxWidth().padding(horizontal = if (wide) 48.dp else 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -141,7 +145,31 @@ private fun TopBar(model: AppModel, r: RecvVM) {
                 StatusDot(r.live)
                 Label(r.status, size = 13.sp, weight = FontWeight.SemiBold, lines = 1)
             }
+            if (wide && (r.zoom != null || r.canSwitch)) {
+                Spacer(Modifier.weight(1f))
+                CamTools(model, r)
+            }
         }
+    }
+}
+
+/** Zoom and camera switch. */
+@Composable
+private fun CamTools(model: AppModel, r: RecvVM) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        r.zoom?.let { z ->
+            Box(
+                Modifier
+                    .clip(CircleShape)
+                    .background(Color(0xDB0C1017))
+                    .border(1.dp, if (z.active) Lumen.cyan else Lumen.line2, CircleShape)
+                    .clickable { model.dispatch(Ev.resetZoom) }
+                    .defaultMinSize(minWidth = 48.dp, minHeight = 36.dp)
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) { Text(z.label, style = mono(13.sp, FontWeight.SemiBold), color = Lumen.text) }
+        }
+        if (r.canSwitch) IconBtn(Icons.switchCamera, model.t("switchCam"), background = Color(0xDB0C1017), size = 48.dp) { model.dispatch(Ev.switchCamera) }
     }
 }
 
@@ -266,14 +294,14 @@ private fun ScanningLayer(model: AppModel, r: RecvVM) {
     val prefs = remember { context.getSharedPreferences("lumen", Context.MODE_PRIVATE) }
     var details by remember { mutableStateOf(prefs.getBoolean(DETAILS_KEY, false)) }
     BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+        // On its side the screen is wide and low and the code fills it: the panel becomes one
+        // line and a bar at the bottom, the camera tools move into the top bar, and the scan
+        // frame is the screen's four corners (as on iPhone).
         val landscape = maxWidth > maxHeight
-        val dockWidth = if (landscape) minOf(340.dp, maxWidth * 0.44f) else minOf(560.dp, maxWidth - 20.dp)
+        val dockWidth = if (landscape) minOf(720.dp, maxWidth - 96.dp) else minOf(560.dp, maxWidth - 20.dp)
         var dockHeight by remember { mutableIntStateOf(0) }
         val dockH = with(LocalDensity.current) { dockHeight.toDp() }
         if (!r.live) {
-            // Upright, the frame is the space between the bar and the panel. On its side the
-            // code is meant to fill the screen: the frame is the screen's four corners, and
-            // the bar and the panel keep clear of them.
             Guides(
                 if (landscape) Modifier.fillMaxSize().padding(6.dp)
                 else Modifier.fillMaxSize().padding(top = 62.dp, bottom = dockH + 6.dp + 18.dp, start = 22.dp, end = 22.dp),
@@ -281,30 +309,16 @@ private fun ScanningLayer(model: AppModel, r: RecvVM) {
         }
         Column(
             Modifier
-                .align(if (landscape) Alignment.BottomEnd else Alignment.BottomCenter)
-                .padding(horizontal = if (landscape) 48.dp else 10.dp, vertical = 6.dp)
+                .align(Alignment.BottomCenter)
+                .padding(vertical = 6.dp)
                 .width(dockWidth)
                 .onSizeChanged { dockHeight = it.height },
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (r.zoom != null || r.canSwitch) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
-                    r.zoom?.let { z ->
-                        Box(
-                            Modifier
-                                .clip(CircleShape)
-                                .background(Color(0xDB0C1017))
-                                .border(1.dp, if (z.active) Lumen.cyan else Lumen.line2, CircleShape)
-                                .clickable { model.dispatch(Ev.resetZoom) }
-                                .defaultMinSize(minWidth = 48.dp, minHeight = 36.dp)
-                                .padding(horizontal = 12.dp),
-                            contentAlignment = Alignment.Center,
-                        ) { Text(z.label, style = mono(13.sp, FontWeight.SemiBold), color = Lumen.text) }
-                    }
-                    if (r.canSwitch) IconBtn(Icons.switchCamera, model.t("switchCam"), background = Color(0xDB0C1017), size = 48.dp) { model.dispatch(Ev.switchCamera) }
-                }
+            if (!landscape && (r.zoom != null || r.canSwitch)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { CamTools(model, r) }
             }
-            Hud(model, r, details) {
+            Hud(model, r, details, compact = landscape) {
                 details = !details
                 prefs.edit().putBoolean(DETAILS_KEY, details).apply()
             }
@@ -339,25 +353,41 @@ private fun Guides(modifier: Modifier) {
     }
 }
 
+/** `compact` (a wide, low screen): name, speed and percentage on one line over the bar. */
 @Composable
-private fun Hud(model: AppModel, r: RecvVM, details: Boolean, toggleDetails: () -> Unit) {
+private fun Hud(model: AppModel, r: RecvVM, details: Boolean, compact: Boolean = false, toggleDetails: () -> Unit) {
     // no animation: progress already moves 20 times a second, and an animation would redraw
     // the panel on every display frame while receiving
     val progress = r.progress
-    Column(Modifier.fillMaxWidth().panel(opaque = true).padding(horizontal = 16.dp, vertical = 14.dp)) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(r.name, color = Lumen.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            Spacer(Modifier.width(12.dp))
-            Text(r.pct, style = mono(22.sp, FontWeight.Bold), color = Lumen.text)
-        }
-        Box(Modifier.padding(top = 10.dp).fillMaxWidth().height(8.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f))) {
-            Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).clip(CircleShape).background(Lumen.spectrum))
-        }
-        // the row keeps its height while the line is empty: nothing jumps when data arrives
-        Row(Modifier.padding(top = 6.dp).fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(r.line, color = Lumen.text, fontSize = 13.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            Spacer(Modifier.width(10.dp))
-            DetailsToggle(model.t("details"), details, toggleDetails)
+    Column(Modifier.fillMaxWidth().panel(opaque = true).padding(horizontal = if (compact) 14.dp else 16.dp, vertical = if (compact) 9.dp else 14.dp)) {
+        if (compact) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(r.name, color = Lumen.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                Spacer(Modifier.width(10.dp))
+                Text(r.line, color = Lumen.muted, fontSize = 13.sp, maxLines = 1, softWrap = false)
+                Spacer(Modifier.weight(1f))
+                Text(r.pct, style = mono(18.sp, FontWeight.Bold), color = Lumen.text, modifier = Modifier.padding(horizontal = 10.dp))
+                DetailsToggle(null, details, toggleDetails)
+            }
+            Box(Modifier.padding(top = 6.dp).fillMaxWidth().height(6.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f))) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).clip(CircleShape).background(Lumen.spectrum))
+            }
+            if (details || !r.tipOk) Spacer(Modifier.height(6.dp))
+        } else {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(r.name, color = Lumen.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(12.dp))
+                Text(r.pct, style = mono(22.sp, FontWeight.Bold), color = Lumen.text)
+            }
+            Box(Modifier.padding(top = 10.dp).fillMaxWidth().height(8.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.08f))) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(progress.coerceIn(0f, 1f)).clip(CircleShape).background(Lumen.spectrum))
+            }
+            // the row keeps its height while the line is empty: nothing jumps when data arrives
+            Row(Modifier.padding(top = 6.dp).fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(r.line, color = Lumen.text, fontSize = 13.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(10.dp))
+                DetailsToggle(model.t("details"), details, toggleDetails)
+            }
         }
         if (details || !r.tipOk) {
             Label(r.tip, size = 13.sp, color = if (r.tipOk) Lumen.muted else Lumen.amber, lines = 2)
@@ -380,9 +410,9 @@ private fun Hud(model: AppModel, r: RecvVM, details: Boolean, toggleDetails: () 
     }
 }
 
-/** "Details ⌄": folds the numbers in and out (remembered across launches). */
+/** "Details ⌄": folds the numbers in and out (remembered across launches); `label` null: the arrow alone. */
 @Composable
-private fun DetailsToggle(label: String, open: Boolean, toggle: () -> Unit) {
+private fun DetailsToggle(label: String?, open: Boolean, toggle: () -> Unit) {
     val rot by animateFloatAsState(if (open) 180f else 0f, label = "chevron")
     Row(
         Modifier
@@ -394,12 +424,12 @@ private fun DetailsToggle(label: String, open: Boolean, toggle: () -> Unit) {
             .semantics {
                 if (open) collapse { toggle(); true } else expand { toggle(); true }
             }
-            .defaultMinSize(minHeight = 36.dp)
-            .padding(start = 12.dp, end = 9.dp),
+            .defaultMinSize(minHeight = if (label != null) 36.dp else 30.dp)
+            .padding(start = if (label != null) 12.dp else 9.dp, end = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(label, color = Lumen.muted, fontSize = 13.sp, maxLines = 1)
+        if (label != null) Text(label, color = Lumen.muted, fontSize = 13.sp, maxLines = 1)
         Icon(Icons.chevronDown, contentDescription = null, tint = Lumen.muted, modifier = Modifier.size(16.dp).rotate(rot))
     }
 }

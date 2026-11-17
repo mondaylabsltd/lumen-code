@@ -351,9 +351,11 @@ fn settings(root: &Root, window: &Window) -> AnyElement {
             .flex()
             .items_center()
             .gap(px(10.))
-            // the label ends at its control (right-aligned in its column): it reads as the name
-            // of what follows, and stays clear of the control before it
-            .child(div().w(px(label_w)).flex_none().text_right().text_size(px(13.)).text_color(c(MUTED)).child(label.to_string()))
+            // Side by side, a label is as wide as its text and its control follows at once: it
+            // reads as the name of what follows, the row starts at the panel's left edge (in line
+            // with the details under it), and the wide gap keeps it clear of the control before
+            // it. Stacked in one column, the labels share a width so that the controls line up.
+            .child(div().when(cols <= 1.0, |d| d.w(px(label_w))).flex_none().whitespace_nowrap().text_size(px(13.)).text_color(c(MUTED)).child(label.to_string()))
             .child(div().flex_1().min_w_0().child(el))
     };
     let fps = s.fps;

@@ -1,8 +1,8 @@
 # Lumen Code 上架资料
 
-当前准备版本：**1.0.1**（iOS build 2，Android versionCode 2）。
+当前准备版本：**1.1.0**（iOS build 3，Android versionCode 4）。
 
-先看 [1.0.1 发布资料总览](releases/1.0.1.md)，其中列出了已签名的 Android 包、iOS archive、桌面正式下载及本机资料压缩包。商店提交由账号持有人操作。
+先看 [1.1.0 发布资料总览](releases/1.1.0.md)，其中列出了已签名的 Android 包、iOS archive、桌面正式下载和各平台的验证情况；上一版见 [1.0.1](releases/1.0.1.md)。商店提交由账号持有人操作。
 
 - [App Store 字段及截图](app-store/listing.md)
 - [Google Play 字段、截图、图标及宣传图](google-play/listing.md)

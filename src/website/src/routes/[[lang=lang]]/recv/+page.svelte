@@ -256,7 +256,13 @@
 
 <Seo {lang} page="recv" title={t('titleRecv')} description={t('descRecv')} />
 
-<div class="stage recv" id="stage" bind:this={stage} style:--hud-h="{hudH}px">
+<div
+	class="stage recv"
+	class:scanning={rx?.phase === 'scanning'}
+	id="stage"
+	bind:this={stage}
+	style:--hud-h="{hudH}px"
+>
 	<video id="video" playsinline muted autoplay bind:this={video}></video>
 	<canvas id="overlay" bind:this={overlay}></canvas>
 
