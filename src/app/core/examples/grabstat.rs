@@ -16,6 +16,10 @@ fn main() {
     let dir = &args[1];
     let verbose = std::env::var("V").is_ok();
     let mut sc = Scanner::new();
+    // LEAN=1: the cells read one by one, as the WebAssembly build does
+    if std::env::var("LEAN").is_ok() {
+        sc.set_lean(true);
+    }
     let mut hint: Option<Hint> = None;
     let mut all: HashSet<Vec<u8>> = HashSet::new();
     // seq -> (codeword indices decoded, captures, total codewords)

@@ -193,6 +193,8 @@ pub struct Hint {
 enum Pixels<'a> {
     Rgba(&'a [u8]),
     Yuv { cbcr: &'a [u8], cw: usize, ch: usize },
+    /// An RGBA picture on the camera path (see [`Lean`]).
+    Lean(&'a [u8]),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -283,6 +285,9 @@ pub struct Scanner {
     // The grid layout of the last decoded frame: a transfer keeps its size, and building a
     // layout (Hilbert order, header positions) costs as much as a tenth of a scan.
     layout: std::cell::RefCell<Option<std::sync::Arc<Grid>>>,
+    /// Whether camera planes are read cell by cell ([`Lean`]) rather than smoothed whole:
+    /// None = as suits the target (cell by cell in WebAssembly).
+    lean: Option<bool>,
 }
 
 /// What the camera path keeps of a code from one capture to the next. A code on a screen
@@ -364,6 +369,7 @@ struct Ctx<'a> {
     px: Pixels<'a>,
     layout_cache: &'a std::cell::RefCell<Option<std::sync::Arc<Grid>>>,
     hint: Option<Hint>,
+    lean: bool,
     /// Whether `thr` covers the whole image (else only the hint windows).
     thr_full: bool,
 }
@@ -382,24 +388,51 @@ impl Scanner {
         self.scan_hinted(img, skip, None)
     }
 
+    /// How [`Scanner::scan_yuv`] reads the cells: cell by cell (see [`Lean`]) or from a luma
+    /// plane smoothed whole. Left alone, each target takes its faster way.
+    pub fn set_lean(&mut self, lean: bool) {
+        self.lean = Some(lean);
+    }
+
     /// [`Scanner::scan`] with a tracking hint (see [`Hint`]).
     pub fn scan_hinted(&mut self, img: &Image, skip: Option<&SkipMap>, hint: Option<Hint>) -> ScanResult {
         let (w, h) = (img.width, img.height);
         if w < 16 || h < 16 || img.rgba.len() < w * h * 4 {
             return ScanResult::fail("image", 0);
         }
-        // luma (buffers only grow)
-        if self.luma.len() < w * h {
-            self.luma.resize(w * h, 0);
-        }
         let rgba = img.rgba;
-        for (l, p) in self.luma[..w * h].iter_mut().zip(rgba[..w * h * 4].chunks_exact(4)) {
-            *l = ((p[0] as u32 * 77 + p[1] as u32 * 150 + p[2] as u32 * 29) >> 8) as u8;
-        }
-        let luma = std::mem::take(&mut self.luma);
+        let luma = self.luma_of(rgba, w * h);
         let res = self.scan_luma(w, h, &luma[..w * h], Pixels::Rgba(rgba), skip, hint);
         self.luma = luma;
         res
+    }
+
+    /// Scans an RGBA picture on the camera path: what [`Scanner::scan_yuv`] does for a camera's
+    /// own planes, for a picture that arrives as RGBA (a browser's canvas). The scanner keeps
+    /// what it learnt from the last picture; results need not match [`Scanner::scan`].
+    pub fn scan_rgba_camera(&mut self, img: &Image, skip: Option<&SkipMap>, hint: Option<Hint>) -> ScanResult {
+        let (w, h) = (img.width, img.height);
+        if w < 16 || h < 16 || img.rgba.len() < w * h * 4 {
+            return ScanResult::fail("image", 0);
+        }
+        let luma = self.luma_of(img.rgba, w * h);
+        let res = self.scan_luma(w, h, &luma[..w * h], Pixels::Lean(img.rgba), skip, hint);
+        self.luma = luma;
+        res
+    }
+
+    /// The luma of `n` RGBA pixels, in the scanner's buffer (taken out; give it back).
+    fn luma_of(&mut self, rgba: &[u8], n: usize) -> Vec<u8> {
+        // (buffers only grow)
+        if self.luma.len() < n {
+            self.luma.resize(n, 0);
+        }
+        for (l, p) in self.luma[..n].iter_mut().zip(rgba[..n * 4].chunks_exact(4)) {
+            // one four-byte read a pixel
+            let v = u32::from_le_bytes([p[0], p[1], p[2], p[3]]);
+            *l = (((v & 255) * 77 + (v >> 8 & 255) * 150 + (v >> 16 & 255) * 29) >> 8) as u8;
+        }
+        std::mem::take(&mut self.luma)
     }
 
     /// Scans a Y'CbCr image without converting it: the camera's luma is used as is.
@@ -445,12 +478,13 @@ impl Scanner {
         self.thresholds(luma, w, h, bs, bw, bh, regions.as_deref());
         let soft_bufs = std::mem::take(&mut self.soft);
         let soft = &soft_bufs;
-        let mut ctx = Ctx { w, h, bs, bw, luma, soft, track: &self.track, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: regions.is_none() };
+        let lean = self.lean.unwrap_or(cfg!(target_arch = "wasm32"));
+        let mut ctx = Ctx { w, h, bs, bw, luma, soft, track: &self.track, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: regions.is_none(), lean };
         let (mut res, mut tried_reuse) = ctx.run(skip, self.last_header);
         if res.reason == RETHRESHOLD {
             // the windows missed: the whole image after all
             self.thresholds(luma, w, h, bs, bw, bh, None);
-            ctx = Ctx { w, h, bs, bw, luma, soft, track: &self.track, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: true };
+            ctx = Ctx { w, h, bs, bw, luma, soft, track: &self.track, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: true, lean };
             (res, tried_reuse) = ctx.run(skip, self.last_header);
         }
         self.soft = soft_bufs;
@@ -601,7 +635,7 @@ impl<'a> Ctx<'a> {
                     6.0 * (yv + 1.772 * cb).clamp(0.0, 255.0),
                 ]
             }
-            Pixels::Rgba(_) => {
+            Pixels::Rgba(_) | Pixels::Lean(_) => {
                 let mut a = [0f64; 3];
                 self.rgb_at(px, py, &mut a);
                 a = [a[0] * 2.0, a[1] * 2.0, a[2] * 2.0];
@@ -625,7 +659,7 @@ impl<'a> Ctx<'a> {
         let j = i + self.w * 4;
         let (w00, w10, w01, w11) = ((1.0 - ax) * (1.0 - ay), ax * (1.0 - ay), (1.0 - ax) * ay, ax * ay);
         match self.px {
-            Pixels::Rgba(p) => {
+            Pixels::Rgba(p) | Pixels::Lean(p) => {
                 for c in 0..3 {
                     out[c] += p[i + c] as f64 * w00 + p[i + 4 + c] as f64 * w10 + p[j + c] as f64 * w01 + p[j + 4 + c] as f64 * w11;
                 }
@@ -1571,7 +1605,7 @@ impl<'a> Ctx<'a> {
         }
         // Tracking (camera path): where the points were in the last capture, moved as the
         // corner points moved since.
-        let camera = matches!(self.px, Pixels::Yuv { .. });
+        let camera = !matches!(self.px, Pixels::Rgba(_));
         let now_corners = r.map(|o| o.map(|f| [f.x, f.y]));
         let tracked: Option<(H3, Vec<f64>, Vec<bool>)> = if camera {
             let mut t = self.track.borrow_mut();
@@ -1816,22 +1850,29 @@ impl<'a> Ctx<'a> {
         let mut symbols = vec![0u8; d];
         let mut conf = vec![0f32; d];
         let mut colours = None;
-        if let Pixels::Yuv { cbcr, cw, ch } = self.px {
+        if camera {
             // The camera path: the same steps as below in single precision, each cell read
-            // once from a smoothed luma plane. Its results need not match another scanner bit
-            // for bit, as those of the RGBA path must.
-            let corners = [gpt(kk[TL]), gpt(kk[TR]), gpt(kk[BR]), gpt(kk[BL])];
-            let cam = Camera { luma: self.luma, w: self.w, h: self.h, cbcr, cw, ch };
-            let mut bufs = self.soft.borrow_mut();
-            let (soft, rows) = &mut *bufs;
-            let area = cam.smooth(&corners, cell_px, soft, rows);
+            // once with the luma around it smoothed. Its results need not match another
+            // scanner bit for bit, as those of the RGBA path must.
             let m = slots.len();
             let mut cells = [vec![0f32; m], vec![0f32; m], vec![0f32; m]];
             let at = SampleAt { slot_x, slot_y, qi_of: &qi_of, qj_of: &qj_of, qh: &qh, nx, refs: &refs, fx_of: &fx_of, fy_of: &fy_of };
-            if m == count * cpc {
-                cam.sample_all(soft, area, &grid, &at, &mut cells);
-            } else {
-                cam.sample(soft, area, &slots, &at, &mut cells);
+            match self.px {
+                Pixels::Yuv { cbcr, cw, ch } if self.lean => Lean { luma: self.luma, colour: Colour::Planes { cbcr, cw, ch }, w: self.w, h: self.h }.sample(cell_px, &slots, &at, &mut cells),
+                Pixels::Yuv { cbcr, cw, ch } => {
+                    let corners = [gpt(kk[TL]), gpt(kk[TR]), gpt(kk[BR]), gpt(kk[BL])];
+                    let cam = Camera { luma: self.luma, w: self.w, h: self.h, cbcr, cw, ch };
+                    let mut bufs = self.soft.borrow_mut();
+                    let (soft, rows) = &mut *bufs;
+                    let area = cam.smooth(&corners, cell_px, soft, rows);
+                    if m == count * cpc {
+                        cam.sample_all(soft, area, &grid, &at, &mut cells);
+                    } else {
+                        cam.sample(soft, area, &slots, &at, &mut cells);
+                    }
+                }
+                Pixels::Lean(rgba) => Lean { luma: self.luma, colour: Colour::Rgba(rgba), w: self.w, h: self.h }.sample(cell_px, &slots, &at, &mut cells),
+                Pixels::Rgba(_) => unreachable!(),
             }
             let gains = Gains { gbw, gbh, step_x, step_y, blend_x: &blend_x, blend_y: &blend_y, slot_x, slot_y };
             let t = self.track.borrow();
@@ -2231,6 +2272,126 @@ impl Camera<'_> {
     }
 }
 
+/// The camera path with each cell read on its own. What [`Camera`] reads from a luma plane
+/// smoothed whole is worked out here at each cell alone: the same binomial kernel over the
+/// luma around the cell's centre. A cell covers a few pixels, so this touches far less of the
+/// picture than filtering all of it. Where vector instructions make that cheap (natively) it
+/// is no gain; in WebAssembly, which has none by default and checks every memory access on
+/// some systems, the filtering was most of a scan. The colour comes from the camera's chroma
+/// plane, or from an RGBA picture (a browser's canvas) at the centre.
+struct Lean<'a> {
+    luma: &'a [u8],
+    colour: Colour<'a>,
+    w: usize,
+    h: usize,
+}
+
+#[derive(Clone, Copy)]
+enum Colour<'a> {
+    Rgba(&'a [u8]),
+    Planes { cbcr: &'a [u8], cw: usize, ch: usize },
+}
+
+impl Lean<'_> {
+    /// As [`Camera::sample`]: every slot's cell, normalised by the white and ink around it.
+    fn sample(&self, cell_px: f64, slots: &[usize], at: &SampleAt, out: &mut [Vec<f32>; 3]) {
+        let (w, h) = (self.w, self.h);
+        let r: usize = if cell_px < 3.9 { 1 } else if cell_px < 5.2 { 2 } else { 3 };
+        const KERNELS: [&[f32]; 3] = [&[0.25, 0.5, 0.25], &[0.0625, 0.25, 0.375, 0.25, 0.0625], &[0.015625, 0.09375, 0.234375, 0.3125, 0.234375, 0.09375, 0.015625]];
+        let kernel = KERNELS[r - 1];
+        // a bilinear tap of the smoothed luma is the luma under the kernel laid between two
+        // pixels: one more tap each way
+        let taps = 2 * r + 2;
+        let (lx1, ly1) = ((w - r - 2) as f64, (h - r - 2) as f64);
+        let (cx1, cy1) = ((w - 2) as f64, (h - 2) as f64);
+        let refs: Vec<[f32; 6]> = at.refs.chunks_exact(6).map(|r| [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32, r[4] as f32, r[5] as f32]).collect();
+        let nx = at.nx;
+        let [out_r, out_g, out_b] = out;
+        for (i, &s) in slots.iter().enumerate() {
+            let (cx, cy) = (at.slot_x[s] as usize, at.slot_y[s] as usize);
+            let (qi, qj) = (at.qi_of[cx], at.qj_of[cy]);
+            let hq = &at.qh[qj * (nx - 1) + qi];
+            let (gx, gy) = (cx as f64 + 0.5, cy as f64 + 0.5);
+            let iw = 1.0 / (hq[6] * gx + hq[7] * gy + hq[8]);
+            let px = (hq[0] * gx + hq[1] * gy + hq[2]) * iw;
+            let py = (hq[3] * gx + hq[4] * gy + hq[5]) * iw;
+            let x = (px - 0.5).clamp(r as f64, lx1);
+            let y = (py - 0.5).clamp(r as f64, ly1);
+            let (ix, iy) = (x as usize, y as usize);
+            let (ax, ay) = ((x - ix as f64) as f32, (y - iy as f64) as f32);
+            let (mut wx, mut wy) = ([0f32; 8], [0f32; 8]);
+            for k in 0..taps {
+                let here = if k + 1 < taps { kernel[k] } else { 0.0 };
+                let before = if k > 0 { kernel[k - 1] } else { 0.0 };
+                wx[k] = here + (before - here) * ax;
+                wy[k] = here + (before - here) * ay;
+            }
+            let first = (iy - r) * w + ix - r;
+            let mut yv = 0f32;
+            for (j, &wj) in wy[..taps].iter().enumerate() {
+                let row = &self.luma[first + j * w..first + j * w + taps];
+                let mut acc = 0f32;
+                for (&v, &wi) in row.iter().zip(&wx[..taps]) {
+                    acc += v as f32 * wi;
+                }
+                yv += acc * wj;
+            }
+            let (cb, cr) = match self.colour {
+                Colour::Rgba(rgba) => {
+                    // One tap at the centre, not smoothed. A browser's picture has its colour
+                    // at full resolution, and a wider tap takes in the neighbours' (measured
+                    // on Safari captures of a code with 4-pixel cells: a mean over 2 × 2
+                    // pixels decodes 8% fewer codewords, over 3 × 3 a quarter fewer).
+                    let x = (px - 0.5).clamp(0.0, cx1);
+                    let y = (py - 0.5).clamp(0.0, cy1);
+                    let (jx, jy) = (x as usize, y as usize);
+                    let (bx, by) = ((x - jx as f64) as f32, (y - jy as f64) as f32);
+                    let k = (jy * w + jx) * 4;
+                    let (top, bot) = (&rgba[k..k + 8], &rgba[k + w * 4..k + w * 4 + 8]);
+                    let tap = |o: usize| {
+                        let a = top[o] as f32 + (top[o + 4] as f32 - top[o] as f32) * bx;
+                        let b = bot[o] as f32 + (bot[o + 4] as f32 - bot[o] as f32) * bx;
+                        a + (b - a) * by
+                    };
+                    let (rm, gm, bm) = (tap(0), tap(1), tap(2));
+                    (-0.168_736 * rm - 0.331_264 * gm + 0.5 * bm, 0.5 * rm - 0.418_688 * gm - 0.081_312 * bm)
+                }
+                Colour::Planes { cbcr, cw, ch } => {
+                    // Chroma sample (cx, cy) lies level with luma column 2cx and between rows 2cy
+                    // and 2cy + 1, as video has it (Camera::sample takes it centred both ways).
+                    // Measured on a frame from Safari on an iPhone 15 Pro, by where the tap is
+                    // taken along the row: a quarter of a chroma sample left of this 0
+                    // codewords of 121, centred 24, here 34, a quarter right 25.
+                    let x = ((px - 0.5) * 0.5).clamp(0.0, cw as f64 - 1.001);
+                    let y = ((py - 0.5) * 0.5 - 0.25).clamp(0.0, ch as f64 - 1.001);
+                    let (jx, jy) = (x as usize, y as usize);
+                    let (bx, by) = ((x - jx as f64) as f32, (y - jy as f64) as f32);
+                    let k = (jy * cw + jx) * 2;
+                    let (top, bot) = (&cbcr[k..k + 4], &cbcr[k + cw * 2..k + cw * 2 + 4]);
+                    let lerp2 = |o: usize| {
+                        let a = top[o] as f32 + (top[o + 2] as f32 - top[o] as f32) * bx;
+                        let b = bot[o] as f32 + (bot[o + 2] as f32 - bot[o] as f32) * bx;
+                        a + (b - a) * by - 128.0
+                    };
+                    (lerp2(0), lerp2(1))
+                }
+            };
+            let rgb = [(yv + 1.402 * cr).clamp(0.0, 255.0), (yv - 0.344_136 * cb - 0.714_136 * cr).clamp(0.0, 255.0), (yv + 1.772 * cb).clamp(0.0, 255.0)];
+            let (fx, fy) = (at.fx_of[cx] as f32, at.fy_of[cy] as f32);
+            let k00 = qj * nx + qi;
+            let (r00, r10, r01, r11) = (&refs[k00], &refs[k00 + 1], &refs[k00 + nx], &refs[k00 + nx + 1]);
+            let (w00, w10, w01, w11) = ((1.0 - fx) * (1.0 - fy), fx * (1.0 - fy), (1.0 - fx) * fy, fx * fy);
+            let mut rf = [0f32; 6];
+            for (o, v) in rf.iter_mut().enumerate() {
+                *v = r00[o] * w00 + r10[o] * w10 + r01[o] * w01 + r11[o] * w11;
+            }
+            out_r[i] = (rgb[0] - rf[3]) / (rf[0] - rf[3]).max(12.0);
+            out_g[i] = (rgb[1] - rf[4]) / (rf[1] - rf[4]).max(12.0);
+            out_b[i] = (rgb[2] - rf[5]) / (rf[2] - rf[5]).max(12.0);
+        }
+    }
+}
+
 /// The gain blocks of the classifier: their grid, and where each slot's cell sits among them.
 struct Gains<'a> {
     gbw: usize,
@@ -2243,9 +2404,6 @@ struct Gains<'a> {
     slot_y: &'a [u16],
 }
 
-/// The camera path's classifier: palette-seeded k-means with a local gain correction, as in
-/// the RGBA path (two rounds, then the final assignment), in single precision over arrays
-/// laid out for the compiler to vectorise. `cells[channel][i]` belongs to slot `slots[i]`.
 /// The camera path's classifier: palette-seeded k-means with a local gain correction, as in
 /// the RGBA path, in single precision over arrays laid out for the compiler to vectorise.
 /// `cells[channel][i]` belongs to slot `slots[i]`.

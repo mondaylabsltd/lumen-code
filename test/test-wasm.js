@@ -95,5 +95,55 @@ if (existsSync('test/out/raw')) {
     if (nw + 1 < nj) fail++;
   }
 }
+// 6. the camera paths (live video in a browser): an RGBA picture, and camera planes cut from
+// a larger frame as VideoFrame.copyTo() lays them out. Each reads every codeword of a clean
+// frame, where the exact path finds the code.
+{
+  const data = new Uint8Array(60000).map((_, i) => (i * 2654435761) >>> 11);
+  const tx = new WasmSender({ payload: data, meta: { name: 'c.bin', fileSize: data.length, crc: 0, flags: 0 } }, { mode: 2, ecc: 1, X: 150, Y: 90, tid: 9 });
+  const r = new Renderer(tx.layout, 2, 5, 2);
+  const [w, h] = [r.width, r.height];
+  const rgba = new Uint8Array(w * h * 4);
+  r.draw(tx.nextFrame().cells, new Uint32Array(rgba.buffer));
+  const exact = new WasmScanner().scan({ width: w, height: h, data: rgba });
+  // the frame inside a larger one, in planes: NV12 with a row stride, and I420
+  const [ox, oy, fw, fh, stride] = [64, 32, w + 128, h + 64, w + 160];
+  const cs = stride >> 1;
+  const nv12 = new Uint8Array(stride * fh + stride * (fh >> 1)).fill(128);
+  const i420 = new Uint8Array(stride * fh + 2 * cs * (fh >> 1)).fill(128);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const p = (y * w + x) * 4;
+      const l = Math.round(0.299 * rgba[p] + 0.587 * rgba[p + 1] + 0.114 * rgba[p + 2]);
+      nv12[(oy + y) * stride + ox + x] = i420[(oy + y) * stride + ox + x] = l;
+      if (x % 2 === 0 && y % 2 === 0) {
+        const cb = Math.round(128 - 0.168736 * rgba[p] - 0.331264 * rgba[p + 1] + 0.5 * rgba[p + 2]);
+        const cr = Math.round(128 + 0.5 * rgba[p] - 0.418688 * rgba[p + 1] - 0.081312 * rgba[p + 2]);
+        const [cx, cy] = [(ox + x) >> 1, (oy + y) >> 1];
+        nv12[stride * fh + cy * stride + cx * 2] = cb;
+        nv12[stride * fh + cy * stride + cx * 2 + 1] = cr;
+        i420[stride * fh + cy * cs + cx] = cb;
+        i420[stride * fh + cs * (fh >> 1) + cy * cs + cx] = cr;
+      }
+    }
+  const crop = { x: ox, y: oy, w, h };
+  const cases = {
+    'RGBA': { width: w, height: h, data: rgba },
+    'NV12': { width: w, height: h, planes: { data: nv12, format: 'NV12', layout: [{ offset: 0, stride }, { offset: stride * fh, stride }], crop } },
+    'I420': { width: w, height: h, planes: { data: i420, format: 'I420', layout: [{ offset: 0, stride }, { offset: stride * fh, stride: cs }, { offset: stride * fh + cs * (fh >> 1), stride: cs }], crop } },
+  };
+  for (const [name, img] of Object.entries(cases)) {
+    const sc = new WasmScanner();
+    let res = sc.scan(img, { camera: true });
+    // again, with the hint of the first scan
+    if (res.ok) res = sc.scan(img, { camera: true, hint: { corners: res.stats.corners, cellPx: res.stats.cellPx } });
+    const n = res.ok ? res.codewords.length : 0;
+    const near = res.ok && res.stats.corners.every((c, i) => Math.hypot(c[0] - exact.stats.corners[i][0], c[1] - exact.stats.corners[i][1]) < 1);
+    const same = res.ok && res.codewords.every((c, i) => c.bytes.every((b, k) => b === exact.codewords[i].bytes[k]));
+    const good = exact.ok && n === exact.stats.cwCount && near && same;
+    console.log(`WASM camera path, ${name}: ${n}/${exact.stats.cwCount} codewords${good ? '' : ' — FAIL'}`);
+    if (!good) fail++;
+  }
+}
 if (fail) { console.log(fail, 'failures'); process.exit(1); }
 console.log('wasm: all passed');

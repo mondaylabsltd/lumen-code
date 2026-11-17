@@ -30,11 +30,44 @@ async function scannerFor(engine: string) {
 }
 
 worker.onmessage = async (e: MessageEvent) => {
-	const { id, bitmap, image, region, dw, dh, skip, engine } = e.data;
+	const { id, bitmap, image, yuv, region, dw, dh, skip, engine, still, exact, hint } = e.data;
 	let img = image;
 	const tPrep = performance.now();
 	try {
 		const scanner = await scannerFor(engine);
+		if (e.data.bench) {
+			// development: the same frame n times on each path (see bench() in receiver.svelte.ts)
+			const c = new OffscreenCanvas(dw, dh);
+			const cx = c.getContext('2d', { willReadFrequently: true })!;
+			const read: number[] = [];
+			let im: ImageData | null = null;
+			for (let i = 0; i < 5; i++) {
+				const t = performance.now();
+				cx.drawImage(bitmap, 0, 0);
+				im = cx.getImageData(0, 0, dw, dh);
+				read.push(performance.now() - t);
+			}
+			bitmap.close();
+			const run = (camera: boolean) => {
+				const ms: number[] = [];
+				let ok = 0;
+				for (let i = 0; i < e.data.bench; i++) {
+					const t = performance.now();
+					const r = scanner.scan(im, { camera });
+					ms.push(Math.round((performance.now() - t) * 10) / 10);
+					ok = r.ok ? r.codewords.length : -1;
+				}
+				return { ms, ok };
+			};
+			worker.postMessage({
+				bench: {
+					read: read.map((v) => Math.round(v * 10) / 10),
+					exact: run(false),
+					camera: run(true)
+				}
+			});
+			return;
+		}
 		const { x: ox, y: oy, kx, ky, fullW, fullH } = region;
 		if (bitmap) {
 			if (!canvas) {
@@ -51,9 +84,20 @@ worker.onmessage = async (e: MessageEvent) => {
 			bitmap.close();
 			img = ctx!.getImageData(0, 0, dw, dh);
 		}
+		// a camera frame in its own planes (WebCodecs): only the part with the code is taken
+		if (yuv) img = { width: region.w, height: region.h, planes: { ...yuv, crop: region } };
 		const t0 = performance.now();
 		const prepMs = t0 - tPrep; // frame copy + read-back: part of the real cost, not of the engine
-		const res = scanner.scan(img, { skip });
+		// (live video: the Rust engine takes its camera path; a still image is scanned exactly)
+		const res = scanner.scan(img, {
+			skip,
+			camera: !still && !exact,
+			// the hint is in camera pixels: here, in those of the piece this scan gets
+			hint: hint && {
+				corners: hint.corners.map(([x, y]: number[]) => [(x - ox) * kx, (y - oy) * ky]),
+				cellPx: (hint.cellPx * (kx + ky)) / 2
+			}
+		});
 		const ms = performance.now() - t0;
 		if (res.ok && res.stats) {
 			// back to camera-frame coordinates
@@ -82,6 +126,7 @@ worker.onmessage = async (e: MessageEvent) => {
 				ms,
 				prepMs,
 				px: img.width * img.height,
+				recycle: yuv ? yuv.data : null,
 				w: fullW,
 				h: fullH,
 				header: res.header || null,
@@ -93,7 +138,7 @@ worker.onmessage = async (e: MessageEvent) => {
 				stats: res.ok ? res.stats : null,
 				packets
 			},
-			packets.map((p) => p.buffer)
+			yuv ? [...packets.map((p) => p.buffer), yuv.data.buffer] : packets.map((p) => p.buffer)
 		);
 	} catch (err: any) {
 		if (bitmap) bitmap.close?.();

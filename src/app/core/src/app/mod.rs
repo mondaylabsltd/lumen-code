@@ -412,7 +412,6 @@ pub(crate) struct DoneState {
     pub content_rev: u64,
 }
 
-#[derive(Default)]
 pub(crate) struct RecvState {
     pub phase: RecvPhase,
     pub generation: u64,
@@ -425,6 +424,10 @@ pub(crate) struct RecvState {
     pub checksum_until: f64,
     pub milestone: u8,
     pub found: bool,
+    /// The share of codewords that decodes, over some ten seconds (negative: none yet). With
+    /// one capture per sender frame it swings with the phase between the two clocks, and
+    /// advice must not swing with it.
+    pub ok_slow: f32,
     pub lost_at: f64,
     pub done: Option<DoneState>,
     /// A one-line note on the start screen (e.g. no code in the chosen image).
@@ -432,6 +435,31 @@ pub(crate) struct RecvState {
     pub tick_attempt: u64,
     pub ticking: bool,
     pub from_image: bool,
+}
+
+impl Default for RecvState {
+    fn default() -> Self {
+        RecvState {
+            phase: RecvPhase::default(),
+            generation: 0,
+            camera: CameraState::default(),
+            last: None,
+            progress: None,
+            prog_hist: VecDeque::new(),
+            first_packet_at: 0.0,
+            active_tid: None,
+            checksum_until: 0.0,
+            milestone: 0,
+            found: false,
+            ok_slow: -1.0,
+            lost_at: 0.0,
+            done: None,
+            note: None,
+            tick_attempt: 0,
+            ticking: false,
+            from_image: false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1068,6 +1096,12 @@ fn scanned(model: &mut Model, report: ScanReport) -> Cmd {
     // Wide hysteresis (the estimate of a 12 fps sender jitters around 12–14), and two seconds
     // for a new mode to settle.
     let sender = report.stats.sender_fps;
+    if report.stats.cov_tot > 0 {
+        let now = report.stats.cov_ok as f32 / report.stats.cov_tot as f32;
+        let last = r.last.as_ref().map_or(report.at, |l| l.at);
+        let w = (((report.at - last) / 8000.0) as f32).clamp(0.0, 1.0);
+        r.ok_slow = if r.ok_slow < 0.0 { now } else { r.ok_slow + w * (now - r.ok_slow) };
+    }
     let hot = model.thermal >= 3;
     let cam = &mut r.camera;
     if cam.on && report.at - cam.mode_at > 2000.0 {

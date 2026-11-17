@@ -9,7 +9,7 @@
 
 use crate::frame::Descriptor;
 use crate::layout::Header;
-use crate::scan::{FrameKey, Image, Scanner, SkipMap};
+use crate::scan::{FrameKey, Hint, Image, Scanner, SkipMap, YuvImage};
 use crate::transfer::{prepare, Action, Finish, Limits, Prepared, Receiver, Sender, State};
 use std::alloc::{alloc, dealloc, Layout as AllocLayout};
 
@@ -36,11 +36,13 @@ unsafe fn slice<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
 pub struct WScanner {
     sc: Scanner,
     out: Vec<u8>,
+    /// Where the code is expected in the next picture on the camera path (`lm_scanner_hint`).
+    hint: Option<Hint>,
 }
 
 #[no_mangle]
 pub extern "C" fn lm_scanner_new() -> *mut WScanner {
-    Box::into_raw(Box::new(WScanner { sc: Scanner::new(), out: Vec::new() }))
+    Box::into_raw(Box::new(WScanner { sc: Scanner::new(), out: Vec::new(), hint: None }))
 }
 
 #[no_mangle]
@@ -70,11 +72,7 @@ fn putf(o: &mut Vec<u8>, v: f64) {
 }
 
 /// skip: u32[] = count, then per frame: seq, x, y, mode, n, nsym, nIdx, idx...
-/// Returns a pointer to the result record; its length is `lm_scanner_out_len`.
-#[no_mangle]
-pub extern "C" fn lm_scan(h: *mut WScanner, rgba: *const u8, w: u32, hgt: u32, skip: *const u32, skip_len: u32) -> *const u8 {
-    let s = unsafe { &mut *h };
-    let data = unsafe { slice(rgba, (w * hgt * 4) as usize) };
+fn skip_map(skip: *const u32, skip_len: u32) -> SkipMap {
     let mut map = SkipMap::new();
     if skip_len > 0 {
         let sk = unsafe { std::slice::from_raw_parts(skip, skip_len as usize) };
@@ -91,8 +89,11 @@ pub extern "C" fn lm_scan(h: *mut WScanner, rgba: *const u8, w: u32, hgt: u32, s
             map.insert(key, idx);
         }
     }
-    let res = s.sc.scan(&Image { width: w as usize, height: hgt as usize, rgba: data }, if map.is_empty() { None } else { Some(&map) });
-    let o = &mut s.out;
+    map
+}
+
+/// The result record of a scan, in `o`.
+fn put_result(o: &mut Vec<u8>, res: crate::scan::ScanResult) {
     o.clear();
     put32(o, res.ok as u32);
     put32(o, res.skipped as u32);
@@ -119,7 +120,59 @@ pub extern "C" fn lm_scan(h: *mut WScanner, rgba: *const u8, w: u32, hgt: u32, s
         put32(o, c.index as u32);
         o.extend_from_slice(c.bytes.as_ref().unwrap());
     }
-    o.as_ptr()
+}
+
+/// Scans an RGBA image exactly as the JavaScript scanner does (the two agree codeword for
+/// codeword). Returns a pointer to the result record; its length is `lm_scanner_out_len`.
+#[no_mangle]
+pub extern "C" fn lm_scan(h: *mut WScanner, rgba: *const u8, w: u32, hgt: u32, skip: *const u32, skip_len: u32) -> *const u8 {
+    let s = unsafe { &mut *h };
+    let data = unsafe { slice(rgba, (w * hgt * 4) as usize) };
+    let map = skip_map(skip, skip_len);
+    let res = s.sc.scan(&Image { width: w as usize, height: hgt as usize, rgba: data }, if map.is_empty() { None } else { Some(&map) });
+    put_result(&mut s.out, res);
+    s.out.as_ptr()
+}
+
+/// Scans an RGBA camera frame on the camera path (`Scanner::scan_rgba_camera`): faster than
+/// [`lm_scan`], and the scanner keeps what it learnt from the last frame (where the lattice
+/// was, the colours). Its results need not match the JavaScript scanner.
+#[no_mangle]
+pub extern "C" fn lm_scan_camera(h: *mut WScanner, rgba: *const u8, w: u32, hgt: u32, skip: *const u32, skip_len: u32) -> *const u8 {
+    let s = unsafe { &mut *h };
+    let data = unsafe { slice(rgba, (w * hgt * 4) as usize) };
+    let map = skip_map(skip, skip_len);
+    let hint = s.hint.take();
+    let res = s.sc.scan_rgba_camera(&Image { width: w as usize, height: hgt as usize, rgba: data }, if map.is_empty() { None } else { Some(&map) }, hint);
+    put_result(&mut s.out, res);
+    s.out.as_ptr()
+}
+
+/// Scans a camera frame in its own planes (`Scanner::scan_yuv`, the path of the native apps):
+/// `y` holds w × h luma bytes, `cbcr` the interleaved Cb, Cr pairs at half resolution
+/// (⌈w/2⌉ pairs a row, ⌈h/2⌉ rows), full-range BT.601, as NV12 lays them out. A browser gets
+/// these from a WebCodecs VideoFrame without drawing the frame to a canvas.
+#[no_mangle]
+pub extern "C" fn lm_scan_yuv(h: *mut WScanner, y: *const u8, cbcr: *const u8, w: u32, hgt: u32, skip: *const u32, skip_len: u32) -> *const u8 {
+    let s = unsafe { &mut *h };
+    let (w, hgt) = (w as usize, hgt as usize);
+    let luma = unsafe { slice(y, w * hgt) };
+    let chroma = unsafe { slice(cbcr, w.div_ceil(2) * hgt.div_ceil(2) * 2) };
+    let map = skip_map(skip, skip_len);
+    let hint = s.hint.take();
+    let res = s.sc.scan_yuv(&YuvImage { width: w, height: hgt, y: luma, cbcr: chroma }, if map.is_empty() { None } else { Some(&map) }, hint);
+    put_result(&mut s.out, res);
+    s.out.as_ptr()
+}
+
+/// Where the code was a moment ago, for the next `lm_scan_camera` or `lm_scan_yuv` only: its four corners in
+/// that picture's pixels (x0, y0 … x3, y3, as a scan reports them) and the cell size. The
+/// finders are then looked for near those corners first.
+#[no_mangle]
+pub extern "C" fn lm_scanner_hint(h: *mut WScanner, corners: *const f64, module: f64) {
+    let s = unsafe { &mut *h };
+    let c = unsafe { std::slice::from_raw_parts(corners, 8) };
+    s.hint = (module > 0.0).then_some(Hint { corners: [[c[0], c[1]], [c[2], c[3]], [c[4], c[5]], [c[6], c[7]]], module });
 }
 
 #[no_mangle]

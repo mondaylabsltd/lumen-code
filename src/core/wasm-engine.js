@@ -49,13 +49,49 @@ export class WasmScanner {
     this.h = X.lm_scanner_new();
     this.img = new Buf();
     this.skip = new Buf();
+    this.hint = new Buf();
   }
 
+  // img: { width, height, data } (RGBA), or a camera frame in its own planes:
+  // { width, height, planes: { data, format: 'NV12' | 'I420', layout, crop } }, with layout as
+  // VideoFrame.copyTo() returns it ([{ offset, stride }, …]) and crop = { x, y, w, h } (even
+  // numbers) the part of the frame to scan; width and height are then the crop's.
   scan(img, opts = {}) {
-    const { width: w, height: h, data } = img;
-    const n = w * h * 4;
-    const p = this.img.get(n);
-    u8().set(data.length === n ? data : data.subarray(0, n), p);
+    const { width: w, height: h } = img;
+    let p;
+    let cp = 0;
+    if (img.planes) {
+      // luma rows, then the chroma rows as interleaved Cb, Cr pairs
+      const { data, format, layout, crop } = img.planes;
+      const [cw, ch] = [(w + 1) >> 1, (h + 1) >> 1];
+      p = this.img.get(w * h + cw * ch * 2);
+      cp = p + w * h;
+      const m = u8();
+      const [Y, U, V] = layout;
+      for (let r = 0; r < h; r++) {
+        const from = Y.offset + (crop.y + r) * Y.stride + crop.x;
+        m.set(data.subarray(from, from + w), p + r * w);
+      }
+      const [cx, cy] = [crop.x >> 1, crop.y >> 1];
+      if (format === 'NV12')
+        for (let r = 0; r < ch; r++) {
+          const from = U.offset + (cy + r) * U.stride + cx * 2;
+          m.set(data.subarray(from, from + cw * 2), cp + r * cw * 2);
+        }
+      else
+        for (let r = 0; r < ch; r++) {
+          let [fu, fv, to] = [U.offset + (cy + r) * U.stride + cx, V.offset + (cy + r) * V.stride + cx, cp + r * cw * 2];
+          for (let c = 0; c < cw; c++) {
+            m[to++] = data[fu++];
+            m[to++] = data[fv++];
+          }
+        }
+    } else {
+      const { data } = img;
+      const n = w * h * 4;
+      p = this.img.get(n);
+      u8().set(data.length === n ? data : data.subarray(0, n), p);
+    }
     let sp = 0;
     let sl = 0;
     const keys = opts.skip ? Object.keys(opts.skip) : [];
@@ -69,7 +105,17 @@ export class WasmScanner {
       sp = this.skip.get(sl * 4);
       new Uint32Array(X.memory.buffer, sp, sl).set(words);
     }
-    const rp = X.lm_scan(this.h, p, w, h, sp, sl);
+    // opts.camera: the camera path, for live video. Faster, and the scanner keeps what it
+    // learnt from the last frame (so one scanner per stream); its results need not match the
+    // JavaScript scanner. Camera planes always take it. opts.hint = { corners, cellPx } of a
+    // moment ago, in this image's pixels: the code is looked for there first.
+    const camera = (opts.camera || img.planes) && X.lm_scan_camera;
+    if (camera && opts.hint && X.lm_scanner_hint) {
+      const hp = this.hint.get(64);
+      new Float64Array(X.memory.buffer, hp, 8).set(opts.hint.corners.flat());
+      X.lm_scanner_hint(this.h, hp, opts.hint.cellPx);
+    }
+    const rp = img.planes ? X.lm_scan_yuv(this.h, p, cp, w, h, sp, sl) : camera ? X.lm_scan_camera(this.h, p, w, h, sp, sl) : X.lm_scan(this.h, p, w, h, sp, sl);
     const dv = view();
     let o = rp;
     const r32 = () => {
@@ -121,6 +167,7 @@ export class WasmScanner {
     this.h = 0;
     this.img.free();
     this.skip.free();
+    this.hint.free();
   }
 }
 

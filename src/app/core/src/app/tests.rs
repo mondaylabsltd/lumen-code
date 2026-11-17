@@ -398,11 +398,24 @@ fn a_sender_as_fast_as_the_camera_is_told_to_halve() {
     m.recv.found = true;
     let stats = LiveStats { last_found_at: now - 50.0, cov_ok: 13, cov_tot: 100, cell: 5.5, cell_n: 9, cam_fps: 120.0, sender_fps: 119.0, span_secs: 2.5, tearing: true, ..LiveStats::default() };
     m.recv.last = Some(ScanReport { at: now - 50.0, ok: true, stats, ..Default::default() });
+    m.recv.ok_slow = 0.13;
     // data is arriving (the warnings for a stalled transfer stay out of the way)
     m.recv.prog_hist.push_back((now - 2000.0, 10));
     m.recv.prog_hist.push_back((now - 100.0, 60));
     let tip = view::view(&m).recv.tip;
     assert!(tip.contains("120") && tip.contains("60") && !tip.contains("96"), "{tip}");
+    // a bad stretch in a transfer that decodes two thirds on average is no reason to halve
+    m.recv.ok_slow = 0.68;
+    assert!(!view::view(&m).recv.tip.contains("60"), "{}", view::view(&m).recv.tip);
+    // a camera at 30 (a browser's): 20 frames a second, each then up for a capture and a half,
+    // and advised already when under 0.6 decodes (20 well read are more than 30 half read)
+    let stats = LiveStats { cam_fps: 30.0, sender_fps: 29.0, tearing: false, ..m.recv.last.as_ref().unwrap().stats.clone() };
+    m.recv.last = Some(ScanReport { at: now - 50.0, ok: true, stats, ..Default::default() });
+    m.recv.ok_slow = 0.42;
+    let tip = view::view(&m).recv.tip;
+    assert!(tip.contains("30") && tip.contains("20"), "{tip}");
+    m.recv.ok_slow = 0.68;
+    assert!(!view::view(&m).recv.tip.contains("20"), "{}", view::view(&m).recv.tip);
 }
 
 /// A warm phone keeps the fast capture mode (fair, serious): giving it up is the loss of rate

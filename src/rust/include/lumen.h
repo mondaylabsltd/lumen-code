@@ -29,6 +29,18 @@ void lm_scanner_free(WScanner *h);
 const uint8_t *lm_scan(WScanner *h, const uint8_t *rgba, uint32_t width, uint32_t height,
                        const uint32_t *skip, uint32_t skip_len);
 uint32_t lm_scanner_out_len(WScanner *h);
+/* The camera path, for live video: faster, and the scanner keeps what it learnt from the last
+ * frame (one scanner per stream). Results need not match lm_scan codeword for codeword.
+ * lm_scan_camera takes an RGBA picture; lm_scan_yuv a camera frame in its own planes
+ * (full-range BT.601): width x height luma bytes, and the interleaved Cb, Cr pairs at half
+ * resolution, (width + 1) / 2 pairs a row, (height + 1) / 2 rows, as NV12 lays them out.
+ * lm_scanner_hint, before either: where the code was a moment ago, for that scan only
+ * (corners: x0, y0 ... x3, y3 as a result record gives them; module: its cellPx). */
+const uint8_t *lm_scan_camera(WScanner *h, const uint8_t *rgba, uint32_t width, uint32_t height,
+                              const uint32_t *skip, uint32_t skip_len);
+const uint8_t *lm_scan_yuv(WScanner *h, const uint8_t *y, const uint8_t *cbcr, uint32_t width,
+                           uint32_t height, const uint32_t *skip, uint32_t skip_len);
+void lm_scanner_hint(WScanner *h, const double *corners, double module);
 
 /* ---- sender: prepared payload -> frames (cell values) ---- */
 WSender *lm_sender_new(const uint8_t *payload, uint32_t len, const uint8_t *name, uint32_t name_len,

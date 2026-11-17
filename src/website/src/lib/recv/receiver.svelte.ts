@@ -110,13 +110,26 @@ export class ReceiveController {
 	private video!: HTMLVideoElement;
 	private overlay!: HTMLCanvasElement;
 	private octx!: CanvasRenderingContext2D;
-	private params = new URLSearchParams(location.search);
+	// (development: VITE_LUMEN_PARAMS on the dev server adds parameters to every visit, so a
+	// phone can be measured without typing a query string on it)
+	private params = new URLSearchParams(
+		[
+			import.meta.env.DEV ? (import.meta.env.VITE_LUMEN_PARAMS ?? '') : '',
+			import.meta.env.DEV ? (sessionStorage.getItem('lumen-dev') ?? '') : '',
+			location.search.slice(1)
+		]
+			.filter(Boolean)
+			.join('&')
+	);
 	private workers: ScanWorker[] = [];
 	private sink!: Worker;
 	private NW: number;
 	private useBitmap =
 		typeof OffscreenCanvas !== 'undefined' && typeof createImageBitmap !== 'undefined';
 	private workerErrors = 0;
+	// camera frames as planes (see grab()); ?frames=0 keeps to the canvas, for comparing
+	private useFrames = typeof VideoFrame !== 'undefined' && this.params.get('frames') !== '0';
+	private framePool: Uint8Array[] = [];
 	private scanMs: number[] = [];
 	private engineNoteUntil = 0;
 	private engineNote = '';
@@ -168,7 +181,12 @@ export class ReceiveController {
 	constructor(lang: Lang) {
 		this.t = (key) => tr(lang, key);
 		const mobile = matchMedia('(pointer: coarse)').matches;
-		this.NW = Math.max(1, Math.min(mobile ? 2 : 3, (navigator.hardwareConcurrency || 4) - 1));
+		// (a phone with six cores takes three as a desktop does: a scan that decodes only part of
+		// a frame takes twice as long, and with two workers the camera's frames were then missed)
+		const cores = navigator.hardwareConcurrency || 4;
+		this.NW = Math.max(1, Math.min(mobile && cores < 6 ? 2 : 3, cores - 1));
+		if (import.meta.env.DEV && this.params.get('workers'))
+			this.NW = Number(this.params.get('workers'));
 		this.rxName = this.t('noData');
 		try {
 			this.engine = localStorage.getItem('lumen.engine') === 'js' ? 'js' : 'wasm'; // WASM: faster, cooler
@@ -259,6 +277,239 @@ export class ReceiveController {
 		this.updateHud();
 	}
 
+	// The Rust engine's path for live video: its camera path, which is faster in WebAssembly
+	// than the exact one and reads more (measured in Safari on an iPhone 15 Pro, a 420 × 201
+	// code filling the picture). ?path=exact asks for the exact path, for comparing.
+	private exactPath() {
+		return this.params.get('path') === 'exact';
+	}
+	// Development only (`bun run dev:https`, the page opened with ?report=<label>): a line a
+	// second to the dev server, so a phone's browser can be measured from the desk. What the
+	// camera says it offers goes with the first line.
+	private reportAt = 0;
+	private reportedCaps = false;
+	private reasons: Record<string, number> = {};
+	private report(now: number) {
+		if (now - this.reportAt < 1000) return;
+		this.reportAt = now;
+		const track = this.track;
+		const settings = track?.getSettings?.() ?? {};
+		const line: Record<string, unknown> = {
+			label: this.params.get('report'),
+			t: Math.round(Date.now() / 1000),
+			cam: `${settings.width}x${settings.height}@${settings.frameRate}`,
+			video: `${this.video.videoWidth}x${this.video.videoHeight}`,
+			speed: this.mSpeed,
+			ok: this.mOk,
+			cell: this.mCell,
+			pct: Math.floor(this.pct),
+			diag: this.diag,
+			tip: this.tip,
+			workers: this.NW,
+			bitmap: this.useBitmap,
+			path: this.exactPath() ? 'exact' : this.useFrames ? 'planes' : 'camera',
+			note: this.camNote
+		};
+		if (Object.keys(this.reasons).length) {
+			line.misses = this.reasons; // why scans found no code, this second
+			this.reasons = {};
+		}
+		if (this.benchResult) {
+			Object.assign(line, this.benchResult);
+			this.benchResult = null;
+		}
+		const ss = this.session;
+		if (ss.msN) line.prep = `${(ss.prepSum / ss.scans).toFixed(1)} ms`;
+		if (!this.reportedCaps && track) {
+			this.reportedCaps = true;
+			line.caps = track.getCapabilities ? track.getCapabilities() : null;
+			line.ua = navigator.userAgent;
+		}
+		fetch('/__report', { method: 'POST', body: JSON.stringify(line) })
+			.then((r) => (r.status === 200 ? r.text() : ''))
+			.then((cmd) => {
+				// parameters set from the desk while the phone stays on the code
+				if (!cmd) return;
+				const q = new URLSearchParams(cmd);
+				const reload = q.has('reload');
+				q.delete('reload');
+				for (const [k, v] of q) {
+					if (v) this.params.set(k, v);
+					else this.params.delete(k);
+				}
+				if (q.has('grab')) this.grabbed = false;
+				if (q.has('bench')) this.bench(Number(q.get('bench')));
+				if (q.has('probe')) this.probe();
+				if (reload) {
+					// kept for this tab, so the parameters outlive the reload
+					const keep = new URLSearchParams(sessionStorage.getItem('lumen-dev') ?? '');
+					for (const [k, v] of q) keep.set(k, v);
+					sessionStorage.setItem('lumen-dev', keep.toString());
+					location.reload();
+				}
+			})
+			.catch(() => {});
+		// every fifth second a piece of the picture as the scanner gets it (the middle, unscaled)
+		if (++this.reportN % 5 === 0 && this.video.videoWidth) {
+			const [w, h] = [Math.min(480, this.video.videoWidth), Math.min(360, this.video.videoHeight)];
+			const c = document.createElement('canvas');
+			c.width = w;
+			c.height = h;
+			const x = (this.video.videoWidth - w) >> 1;
+			const y = (this.video.videoHeight - h) >> 1;
+			c.getContext('2d')!.drawImage(this.video, x, y, w, h, 0, 0, w, h);
+			c.toBlob((b) => {
+				if (b) fetch(`/__frame?cam=${line.cam}`, { method: 'POST', body: b }).catch(() => {});
+			}, 'image/png');
+		}
+	}
+	private reportN = 0;
+
+	// Development only: scanning stops, and one worker scans the frame now in view n times on
+	// each path with nothing else running. Against the times of normal running this tells the
+	// engine's own speed from what the workers lose to each other and to the page.
+	private benching = false;
+	private benchResult: Record<string, unknown> | null = null;
+	private async bench(n: number) {
+		if (this.benching || !n) return;
+		this.benching = true;
+		const w = this.workers[0];
+		const [sw, sh] = this.sourceSize();
+		const bmp = await createImageBitmap(this.video);
+		const wait = () =>
+			new Promise<void>((done) => {
+				const tick = () => (this.workers.some((x) => x.busy) ? setTimeout(tick, 20) : done());
+				tick();
+			});
+		await wait();
+		const normal = w.onmessage;
+		w.onmessage = (ev) => {
+			w.onmessage = normal;
+			this.benchResult = { bench: { size: `${sw}x${sh}`, ...ev.data.bench } };
+			this.benching = false;
+		};
+		w.postMessage({ bench: n, bitmap: bmp, dw: sw, dh: sh, engine: this.engine }, [bmp]);
+	}
+
+	// Development only: what a WebCodecs VideoFrame of the camera holds here, and what copying
+	// it out costs, against the canvas read-back.
+	private async probe() {
+		const out: Record<string, unknown> = {};
+		try {
+			const VF = (self as any).VideoFrame;
+			if (!VF) throw new Error('no VideoFrame');
+			const vf = new VF(this.video);
+			Object.assign(out, {
+				format: vf.format,
+				coded: `${vf.codedWidth}x${vf.codedHeight}`,
+				display: `${vf.displayWidth}x${vf.displayHeight}`,
+				rect: vf.visibleRect && [
+					vf.visibleRect.x,
+					vf.visibleRect.y,
+					vf.visibleRect.width,
+					vf.visibleRect.height
+				],
+				rotation: vf.rotation,
+				colorSpace: vf.colorSpace?.toJSON?.()
+			});
+			const time = async (name: string, opts?: unknown) => {
+				try {
+					const size = vf.allocationSize(opts);
+					const buf = new Uint8Array(size);
+					const ms: number[] = [];
+					let layout: unknown = null;
+					for (let i = 0; i < 6; i++) {
+						const t = performance.now();
+						layout = await vf.copyTo(buf, opts);
+						ms.push(Math.round((performance.now() - t) * 10) / 10);
+					}
+					out[name] = { size, ms, layout };
+					return buf;
+				} catch (err) {
+					out[name] = String(err);
+					return null;
+				}
+			};
+			const raw = await time('native');
+			await time('rgba', { format: 'RGBA' });
+			await time('i420', { format: 'I420' });
+			await time('nv12', { format: 'NV12' });
+			if (raw)
+				fetch(`/__grab?i=vf&w=${vf.codedWidth}&h=${vf.codedHeight}&t=0&fps=${vf.format}`, {
+					method: 'POST',
+					body: new Blob([raw.buffer as ArrayBuffer])
+				}).catch(() => {});
+			// the same frame through a canvas, for comparing
+			const c = document.createElement('canvas');
+			c.width = this.video.videoWidth;
+			c.height = this.video.videoHeight;
+			const cx = c.getContext('2d', { willReadFrequently: true })!;
+			const ms: number[] = [];
+			let px: Uint8ClampedArray | null = null;
+			for (let i = 0; i < 4; i++) {
+				const t = performance.now();
+				cx.drawImage(vf, 0, 0);
+				px = cx.getImageData(0, 0, c.width, c.height).data;
+				ms.push(Math.round((performance.now() - t) * 10) / 10);
+			}
+			out.canvas = { size: `${c.width}x${c.height}`, ms };
+			if (px)
+				fetch(`/__grab?i=vfcanvas&w=${c.width}&h=${c.height}&t=0&fps=rgba`, {
+					method: 'POST',
+					body: new Blob([px.buffer as ArrayBuffer])
+				}).catch(() => {});
+			vf.close();
+		} catch (err) {
+			out.error = String(err);
+		}
+		this.benchResult = { probe: out };
+	}
+
+	// Development only: ?grab=<n> sends n consecutive whole camera frames (raw RGBA) to the dev
+	// server once a code has been in view for two seconds, for scanning them at the desk.
+	private grabbed = false;
+	private maybeGrab(now: number) {
+		const n = Number(this.params.get('grab') || 0);
+		if (!n || this.grabbed || !this.found || now - this.startedAt < 4000) return;
+		this.grabbed = true;
+		const video = this.video;
+		const [w, h] = [video.videoWidth, video.videoHeight];
+		const canvas = document.createElement('canvas');
+		canvas.width = w;
+		canvas.height = h;
+		const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+		const frames: { t: number; data: Uint8ClampedArray; raw?: Uint8Array; fmt?: string }[] = [];
+		const cam = this.track?.getSettings?.() ?? {};
+		const VF = (self as any).VideoFrame;
+		const take = async (t: number) => {
+			// with WebCodecs: the camera's own planes too, of the same frame
+			const vf = VF ? new VF(video) : null;
+			ctx.drawImage(vf ?? video, 0, 0);
+			const f: (typeof frames)[0] = { t, data: ctx.getImageData(0, 0, w, h).data };
+			if (vf) {
+				f.raw = new Uint8Array(vf.allocationSize());
+				f.fmt = vf.format;
+				await vf.copyTo(f.raw);
+				vf.close();
+			}
+			frames.push(f);
+			if (frames.length < n) return video.requestVideoFrameCallback(take);
+			frames.forEach((f, i) => {
+				const q = `i=${i}&w=${w}&h=${h}&t=${f.t.toFixed(1)}`;
+				fetch(`/__grab?${q}&fps=${cam.frameRate}`, {
+					method: 'POST',
+					body: new Blob([f.data.buffer as ArrayBuffer])
+				}).catch(() => {});
+				if (f.raw)
+					fetch(`/__grab?${q}&fps=${f.fmt}`, {
+						method: 'POST',
+						body: new Blob([f.raw.buffer as ArrayBuffer])
+					}).catch(() => {});
+			});
+		};
+		video.requestVideoFrameCallback(take);
+	}
+
 	// ---------- camera
 	async openCamera() {
 		this.startErr = '';
@@ -313,24 +564,83 @@ export class ReceiveController {
 		this.track = null;
 	}
 
-	// The camera's rate follows the sender: at 30 fps every frame of a sender up to ~15 fps is
-	// seen twice; a faster sender needs 60 (when the camera has it) to be seen at all reliably.
-	// Scans stay locked to the sender, so a faster camera adds captures, not scans.
-	private adaptCameraRate(sender: number, now: number) {
+	// The camera's rate follows the sender: each sender frame needs two captures (a screen takes
+	// some milliseconds over a frame change, and one capture mostly lands in it). The camera runs
+	// at the lowest of 30 fps and its doublings, up to what it offers, that gives that.
+	//
+	// A faster mode is kept only if it still shows the colours. Browsers pick the sensor mode
+	// themselves, and a fast one may be binned: Safari on an iPhone 15 Pro gives 720p at 60 fps
+	// with the colour smeared over neighbouring cells (every frame located, no codeword decoded;
+	// 1080p stays at 30). So a fast mode must have at least 1080 lines, and it is given up for
+	// the session when frames are found in it and next to nothing decodes.
+	private camNote = '';
+	private fastBlocked = false;
+	private fastSince = 0;
+	private async adaptCameraRate(sender: number, now: number, okRate: number, frames: number) {
 		const track = this.track;
+		// (development: ?force=1280x720x60 holds a mode whatever it decodes)
+		const force = import.meta.env.DEV ? this.params.get('force') : null;
+		if (force) {
+			if (this.camNote.startsWith('forced') || !track) return;
+			const [fw, fh, ff] = force.split('x').map(Number);
+			this.camNote = 'forced';
+			await track
+				.applyConstraints({ width: { ideal: fw }, height: { ideal: fh }, frameRate: { ideal: ff } })
+				.catch(() => {});
+			const got = track.getSettings();
+			this.camNote = `forced ${got.width}x${got.height}@${got.frameRate}`;
+			this.camRate = got.frameRate ?? 30;
+			return;
+		}
 		if (!track || !track.applyConstraints || now - this.camRateAt < 2000) return;
+		if (this.camRate > 30 && now - this.fastSince > 3000 && frames >= 20 && okRate < 0.15) {
+			this.fastBlocked = true;
+			this.camNote = `${this.camRate} fps decodes ${Math.round(okRate * 100)}%: back to 30`;
+		}
 		const caps: any = track.getCapabilities ? track.getCapabilities() : {};
-		const max = (caps.frameRate && caps.frameRate.max) || 30;
-		let want = this.camRate;
-		if (this.camRate <= 30 && sender >= 16 && max >= 59) want = 60;
-		else if (this.camRate > 30 && sender > 0 && sender < 13) want = 30;
+		const max = this.fastBlocked ? 30 : Math.round((caps.frameRate && caps.frameRate.max) || 30);
+		const rates = [30, 60, 120, 240].filter((r) => r <= max);
+		if (rates[rates.length - 1] !== max && max > 30) rates.push(max);
+		const from = (r: number) => (r <= 30 ? 0 : (r * 16) / 60);
+		let band = Math.max(0, rates.indexOf(this.camRate));
+		while (band + 1 < rates.length && sender >= from(rates[band + 1])) band++;
+		while (band > 0 && sender < from(rates[band]) - 3) band--;
+		const want = rates[band];
 		if (want === this.camRate) return;
-		this.camRate = want;
 		this.camRateAt = now;
-		// the whole set: applyConstraints replaces the constraints, the size included
-		track
-			.applyConstraints({ ...this.videoSize, frameRate: { ideal: want, max: want } })
-			.catch(() => {});
+		const slow = { ...this.videoSize, frameRate: { ideal: 30, max: 30 } };
+		let ok = want <= 30;
+		if (!ok) {
+			// 16:9 first, then the sensor's own 4:3 (some cameras are fast only there)
+			const sizes: MediaTrackConstraints[] = [
+				this.videoSize,
+				{ width: { ideal: 1920 }, height: { ideal: 1440 } }
+			];
+			for (const size of sizes) {
+				try {
+					// the whole set: applyConstraints replaces the constraints, the size included
+					await track.applyConstraints({ ...size, frameRate: { min: 0.9 * want, ideal: want } });
+				} catch {
+					continue;
+				}
+				const got = track.getSettings();
+				ok =
+					(got.frameRate ?? 0) >= 0.9 * want && Math.min(got.width ?? 0, got.height ?? 0) >= 1000;
+				if (ok) break;
+			}
+			if (!ok) {
+				this.fastBlocked = true;
+				const got = track.getSettings();
+				this.camNote = `no ${want} fps at 1080 lines (${got.width}x${got.height}@${got.frameRate})`;
+			}
+		}
+		if (!ok || want <= 30) await track.applyConstraints(slow).catch(() => {});
+		this.camRate = ok ? want : 30;
+		if (ok && want > 30) {
+			this.fastSince = performance.now();
+			this.camNote = `${want} fps`;
+		}
+		this.camRateAt = performance.now();
 	}
 
 	private setupTrackControls() {
@@ -385,7 +695,10 @@ export class ReceiveController {
 		img.src = url;
 	}
 
+	private startedAt = 0;
+	private okSlow = -1;
 	private beginScanning(still?: HTMLImageElement) {
+		this.startedAt = performance.now();
 		this.phase = 'scanning';
 		this.stillImage = still || null;
 		this.crop = null;
@@ -397,7 +710,15 @@ export class ReceiveController {
 			for (const w of this.workers) this.grab(w);
 			return;
 		}
-		this.pump();
+		this.kick();
+	}
+
+	// One frame loop. Starting the camera again (another camera, "receive another") must not
+	// start a second one: each would count the camera's frames and ask for scans.
+	private pumpQueued = false;
+	private lastSeen: { at: number; corners: number[][]; cellPx: number } | null = null;
+	private kick() {
+		if (!this.pumpQueued) this.pump();
 	}
 
 	private sourceSize(): [number, number] {
@@ -414,6 +735,9 @@ export class ReceiveController {
 	// gave last (lastNews): the same packet again is the old frame, not booked to the new one.
 	private scanDue(now: number) {
 		if (this.finished) return now - this.lastDispatch >= 1000 / 3;
+		// the first three seconds after the camera opens: look at every frame, so a code that is
+		// already in view locks at once
+		if (now - this.startedAt < 3000) return true;
 		// searching: 5 scans/s, and 2/s once nothing has been in view for 10 s (phone put down)
 		if (now - this.lastFoundAt > 10000) return now - this.lastDispatch >= 1000 / 2;
 		if (now - this.lastFoundAt > 2000) return now - this.lastDispatch >= 1000 / 5;
@@ -421,18 +745,20 @@ export class ReceiveController {
 	}
 
 	private pump = () => {
+		this.pumpQueued = false;
 		if (!this.running || this.stillImage) return;
 		const now = performance.now();
 		const video = this.video;
 		this.camFrames.push(now);
 		while (this.camFrames.length && now - this.camFrames[0] > 2000) this.camFrames.shift();
-		if (video.readyState >= 2 && video.videoWidth && this.scanDue(now)) {
+		if (video.readyState >= 2 && video.videoWidth && !this.benching && this.scanDue(now)) {
 			const free = this.workers.find((w) => !w.busy);
 			if (free) {
 				this.lastDispatch = now;
 				this.grab(free);
 			}
 		}
+		this.pumpQueued = true;
 		if ('requestVideoFrameCallback' in video) video.requestVideoFrameCallback(this.pump);
 		else requestAnimationFrame(this.pump);
 	};
@@ -485,13 +811,64 @@ export class ReceiveController {
 		const dh = Math.max(32, Math.round(r.h * r.k));
 		const region = { x: r.x, y: r.y, kx: dw / r.w, ky: dh / r.h, fullW: sw, fullH: sh };
 		const engine = this.engine;
+		const still = !!this.stillImage;
+		const exact = this.exactPath();
+		// where the code was a moment ago (camera pixels): the scanner looks there first
+		const seen = this.lastSeen;
+		const hint =
+			seen && !still && performance.now() - seen.at < 500
+				? { corners: seen.corners, cellPx: seen.cellPx }
+				: null;
+		try {
+			if (this.useFrames && engine === 'wasm' && !still && !exact) {
+				// The camera's own planes, where the browser hands them out (WebCodecs): no
+				// drawing to a canvas and reading back, which costs as much as the scan itself
+				// (Safari on an iPhone 15 Pro, 1920 × 1080: 20 ms against under 1 ms), and the
+				// scanner gets what the apps get.
+				const vf = new VideoFrame(this.video);
+				const fmt = vf.format;
+				const upright = vf.codedWidth === sw && vf.codedHeight === sh && !(vf as any).rotation;
+				if ((fmt === 'NV12' || fmt === 'I420') && upright) {
+					const size = vf.allocationSize();
+					let buf = this.framePool.pop();
+					if (!buf || buf.byteLength !== size) buf = new Uint8Array(size);
+					const layout = await vf.copyTo(buf);
+					vf.close();
+					// the part with the code, on even pixels (chroma is at half resolution)
+					const x = r.x & ~1;
+					const y = r.y & ~1;
+					const part = {
+						x,
+						y,
+						w: Math.min(sw - x, (r.w + 3) & ~1),
+						h: Math.min(sh - y, (r.h + 3) & ~1),
+						kx: 1,
+						ky: 1,
+						fullW: sw,
+						fullH: sh
+					};
+					w.postMessage(
+						{ id, yuv: { data: buf, format: fmt, layout }, region: part, skip, engine, hint },
+						[buf.buffer]
+					);
+					return;
+				}
+				vf.close();
+				// another format (a texture, RGBA): the canvas. A frame turned on its side is
+				// only this frame's matter.
+				if (upright) this.useFrames = false;
+			}
+		} catch (err) {
+			this.useFrames = false;
+			console.warn('camera planes unavailable', err);
+		}
 		try {
 			if (this.useBitmap) {
 				// crop + resize happen on the GPU; the worker receives only the small bitmap
 				const opts: ImageBitmapOptions | undefined =
 					dw < r.w ? { resizeWidth: dw, resizeHeight: dh, resizeQuality: 'medium' } : undefined;
 				const bmp = await createImageBitmap(src, r.x, r.y, r.w, r.h, opts);
-				w.postMessage({ id, bitmap: bmp, region, dw, dh, skip, engine }, [bmp]);
+				w.postMessage({ id, bitmap: bmp, region, dw, dh, skip, engine, still, exact, hint }, [bmp]);
 			} else {
 				if (!this.fallbackCanvas) {
 					this.fallbackCanvas = document.createElement('canvas');
@@ -505,7 +882,16 @@ export class ReceiveController {
 				this.fallbackCtx!.drawImage(src, r.x, r.y, r.w, r.h, 0, 0, dw, dh);
 				const im = this.fallbackCtx!.getImageData(0, 0, dw, dh);
 				w.postMessage(
-					{ id, image: { width: dw, height: dh, data: im.data }, region, skip, engine },
+					{
+						id,
+						image: { width: dw, height: dh, data: im.data },
+						region,
+						skip,
+						engine,
+						still,
+						exact,
+						hint
+					},
 					[im.data.buffer]
 				);
 			}
@@ -518,6 +904,7 @@ export class ReceiveController {
 	// ---------- results
 	private onResult(w: ScanWorker, d: any) {
 		w.busy = false;
+		if (d.recycle && this.framePool.length < 4) this.framePool.push(d.recycle);
 		const capturedAt = this.captureAt.get(d.id) ?? performance.now();
 		this.captureAt.delete(d.id);
 		if (d.reason === 'error') {
@@ -529,6 +916,9 @@ export class ReceiveController {
 		const now = performance.now();
 		const s = this.session;
 		this.lastResult = d;
+		if (d.ok && d.stats)
+			this.lastSeen = { at: capturedAt, corners: d.stats.corners, cellPx: d.stats.cellPx };
+		else if (import.meta.env.DEV) this.reasons[d.reason] = (this.reasons[d.reason] ?? 0) + 1;
 		if (d.prepMs !== undefined) {
 			s.prepSum += d.prepMs;
 			s.pxSum += d.px || 0;
@@ -730,7 +1120,8 @@ export class ReceiveController {
 		const dt = recent.length > 1 ? (recent[recent.length - 1].first - recent[0].first) / 1000 : 0;
 		const senderFps = dt > 0.5 ? span / dt : 0;
 		if (senderFps > 0) this.senderFpsEst = senderFps;
-		if (senderFps > 0 && !this.stillImage) this.adaptCameraRate(senderFps, now);
+		if (senderFps > 0 && !this.stillImage)
+			void this.adaptCameraRate(senderFps, now, okRate, recent.length);
 		const distinctFps = dt > 0.5 ? (recent.length - 1) / dt : 0;
 		// share of the sender's frames that were captured; with a fountain code a missed frame
 		// costs only its own data, nothing has to be resent
@@ -746,6 +1137,20 @@ export class ReceiveController {
 				? ` · ${t('senderFps')} ${senderFps.toFixed(0)}/s · ${t('captured')} ${Math.round(captured * 100)}%`
 				: '');
 
+		const camRate = this.track?.getSettings?.().frameRate || camFps;
+		// The share that decodes, over some ten seconds: with one capture per sender frame it
+		// swings with the phase between the two clocks (measured: 30 % to 100 % within a
+		// minute), and advice must not swing with it.
+		if (covTot)
+			this.okSlow = this.okSlow < 0 ? okRate : this.okSlow + 0.05 * (okRate - this.okSlow);
+		const okSlow = this.okSlow < 0 ? okRate : this.okSlow;
+		// The rate the camera can follow: a frame has to stay up for one capture period and the
+		// time a frame change smears a capture. Of the rates a 60 Hz screen shows evenly, the
+		// fastest within 0.7 of the camera's (20 for a camera at 30). Advised when the sender is
+		// faster and what decodes on average is less than the slower rate would bring.
+		// Measured, a 60 Hz monitor to Safari on an iPhone 15 Pro: 248 KB/s at 30 fps (42 %
+		// decoded), 399 KB/s at 20 (80 %). An OLED phone at 30 fps decoded 68 %: no gain from 20.
+		const slower = [120, 60, 30, 20, 15, 12, 10].find((n) => n <= 0.7 * camRate) ?? 0;
 		let msg: string;
 		let good = false;
 		if (now < this.engineNoteUntil) msg = this.engineNote;
@@ -755,7 +1160,9 @@ export class ReceiveController {
 				.replace('{size}', fmtBytes(Math.max(progress.size, progress.payloadLength)))
 				.replace('{max}', fmtBytes(MAX_SIZE));
 		else if (!found) msg = t('tipSearch');
-		else if (!moving && cellN && cell < 3.4) {
+		else if (cellN && (cell < 3.4 ? !moving : cell < 3.9 && okRate < 0.2)) {
+			// (under 4 pixels a cell hardly anything decodes, whatever else is right: measured
+			// in Safari, 0–3 % at 3.5–3.8 pixels where 4.1 gave 45 %)
 			const h = this.lastResult && this.lastResult.header;
 			const portrait = this.video.videoHeight > this.video.videoWidth;
 			msg = h && h.X > h.Y * 1.2 && portrait ? t('tipLandscape') : t('tipCloser');
@@ -771,11 +1178,28 @@ export class ReceiveController {
 		) {
 			msg = t('tipFpsUp').replace('{n}', String(Math.round(Math.min(camFps / 2, senderFps * 1.5))));
 			good = true;
+		} else if (
+			slower &&
+			senderFps > 1.15 * slower &&
+			dt > 2 &&
+			covTot &&
+			okSlow < (0.9 * slower) / senderFps
+		) {
+			msg = t('tipFpsDown')
+				.replace('{cam}', String(Math.round(camRate)))
+				.replace('{n}', String(slower));
+		} else if (moving && dt > 2 && captured > 0.9 && okSlow > 0.6 && cellN && cell >= 5.5) {
+			// It arrives and the cells are larger than the camera needs: with the frame rate
+			// at what the camera can follow, more data per frame is the way up
+			msg = t('tipDenser').replace('{px}', cell.toFixed(1));
+			good = true;
 		} else {
 			msg = t('tipGood');
 			good = true;
 		}
 		this.tip = msg;
+		if (import.meta.env.DEV && this.params.get('report')) this.report(now);
+		if (import.meta.env.DEV) this.maybeGrab(now);
 		this.tipGood = good;
 	}
 
@@ -876,6 +1300,7 @@ export class ReceiveController {
 		this.activeTid = null;
 		this.progHist = [];
 		this.scanHist = [];
+		this.okSlow = -1;
 		this.frameDone.clear();
 		this.resetSession();
 		this.firstPacketAt = 0;
@@ -888,7 +1313,7 @@ export class ReceiveController {
 		} else if (this.video.src) {
 			this.phase = 'scanning';
 			this.running = true;
-			this.pump();
+			this.kick();
 		} else this.phase = 'start';
 	}
 

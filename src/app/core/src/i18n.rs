@@ -124,6 +124,7 @@ const DICT: &[(&str, &str, &str)] = &[
     ("camFps", "相机", "cam"),
     ("scanFps", "识别", "scan"),
     ("frameFps", "新帧", "new frames"),
+    ("tipDenser", "格子较大（{px} 像素）：发送端如果还能调高密度，会更快", "Cells are large ({px} px): a higher density on the sender, if it has one, is faster"),
     ("tipFpsUp", "识别有余量：可把发送端帧率提高到约 {n}", "Spare capacity: you can raise the sender FPS to about {n}"),
     ("details", "参数", "Details"),
     ("vPretty", "格式化", "Formatted"),

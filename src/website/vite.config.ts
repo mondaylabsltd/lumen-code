@@ -5,8 +5,10 @@ import basicSsl from '@vitejs/plugin-basic-ssl';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { ViteDevServer } from 'vite';
 
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 // the version shown on the pages (as in the apps: "1.0.0 · commit · date")
@@ -56,8 +58,64 @@ function buildInfo() {
 	}
 }
 
+// Development only: the receiver opened with ?report=<label> posts a line a second here
+// (src/lib/recv/receiver.svelte.ts); LUMEN_REPORT names the file they are appended to.
+const reportFile = process.env.LUMEN_REPORT;
+const report = {
+	name: 'lumen-report',
+	configureServer(server: ViteDevServer) {
+		const body = (req: IncomingMessage, done: (b: Buffer) => void) => {
+			const parts: Buffer[] = [];
+			req.on('data', (c: Buffer) => parts.push(c));
+			req.on('end', () => done(Buffer.concat(parts)));
+		};
+		// a piece of the camera picture, as the page sees it
+		server.middlewares.use('/__frame', (req: IncomingMessage, res: ServerResponse) => {
+			body(req, (b) => {
+				const cam = /cam=([\w@.]+)/.exec(req.url ?? '')?.[1] ?? 'frame';
+				if (reportFile) writeFileSync(`${reportFile}.${cam}.png`, b);
+				res.statusCode = 204;
+				res.end();
+			});
+		});
+		// whole camera frames, raw RGBA (?grab=<n> on the receiver)
+		server.middlewares.use('/__grab', (req: IncomingMessage, res: ServerResponse) => {
+			body(req, (b) => {
+				const q = new URLSearchParams((req.url ?? '').split('?')[1] ?? '');
+				if (reportFile) {
+					const base = `${reportFile}.grab-${q.get('w')}x${q.get('h')}@${q.get('fps')}-${q.get('i')}`;
+					writeFileSync(`${base}.rgba`, b);
+					appendFileSync(
+						`${reportFile}.grabs`,
+						`${base}.rgba ${q.get('w')} ${q.get('h')} ${q.get('t')}\n`
+					);
+				}
+				res.statusCode = 204;
+				res.end();
+			});
+		});
+		server.middlewares.use('/__report', (req: IncomingMessage, res: ServerResponse) => {
+			body(req, (b) => {
+				if (reportFile) appendFileSync(reportFile, b.toString().replace(/\n/g, ' ') + '\n');
+				// the answer carries one command for the page, if the desk left one in
+				// <LUMEN_REPORT>.cmd: parameters as a query string (path=camera&grab=12, reload=1)
+				let cmd = '';
+				try {
+					cmd = readFileSync(`${reportFile}.cmd`, 'utf8').trim();
+					rmSync(`${reportFile}.cmd`);
+				} catch {
+					// none
+				}
+				res.statusCode = cmd ? 200 : 204;
+				res.end(cmd);
+			});
+		});
+	}
+};
+
 export default defineConfig({
 	plugins: [
+		report,
 		sveltekit({
 			compilerOptions: {
 				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.

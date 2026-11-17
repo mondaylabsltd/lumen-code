@@ -114,6 +114,8 @@ export const DICT = {
 		scanFps: '识别',
 		frameFps: '新帧',
 		tipFpsUp: '识别有余量：可把发送端帧率提高到约 {n}',
+		tipFpsDown: '这台相机每秒只拍 {cam} 帧：发送端调到约 {n} 帧反而更快',
+		tipDenser: '格子较大（{px} 像素）：发送端如果还能调高密度，会更快',
 		details: '参数',
 		vPretty: '格式化',
 		vRaw: '原文',
@@ -233,6 +235,9 @@ export const DICT = {
 		scanFps: 'scan',
 		frameFps: 'new frames',
 		tipFpsUp: 'Spare capacity: you can raise the sender FPS to about {n}',
+		tipFpsDown: 'This camera takes {cam} frames a second: about {n} fps on the sender is faster',
+		tipDenser:
+			'Cells are large ({px} px): a higher density on the sender, if it has one, is faster',
 		details: 'Details',
 		vPretty: 'Formatted',
 		vRaw: 'Raw',

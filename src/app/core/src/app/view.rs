@@ -329,6 +329,7 @@ fn recv_view(m: &Model) -> RecvView {
     let (cell, cell_n) = st.map_or((0.0, 0), |s| (s.cell as f64, s.cell_n));
     let (cov_ok, cov_tot) = st.map_or((0, 0), |s| (s.cov_ok, s.cov_tot));
     let ok_rate = if cov_tot > 0 { cov_ok as f64 / cov_tot as f64 } else { 0.0 };
+    let ok_slow = if r.ok_slow < 0.0 { ok_rate } else { r.ok_slow as f64 };
     let mut speed = "–".to_string();
     let mut eta = "–".to_string();
     // data is arriving: then the transfer is going well, whatever share of each frame is read
@@ -412,11 +413,19 @@ fn recv_view(m: &Model) -> RecvView {
         (t(l, "tipHot").to_string(), false)
     } else if st.is_some_and(|s| s.heat_limited) {
         (t(l, "tipHotScan").to_string(), false)
-    } else if let Some(s) = st.filter(|s| s.span_secs > 2.0 && s.cam_fps > 0.0 && s.sender_fps > 0.55 * s.cam_fps && cov_tot > 0 && ok_rate < 0.8) {
-        // Fewer than two captures per frame, and it shows: a screen takes a few milliseconds over
-        // each frame change, and one capture per frame mostly lands in it. Measured from a
-        // 120 Hz laptop screen to a camera at 120: 0.2–0.4 MB/s at 120 fps, 0.77 MB/s at 60.
-        let n = (s.cam_fps / 2.0).round() as u32;
+    } else if let Some((s, n)) = st.filter(|s| s.span_secs > 2.0 && s.cam_fps > 0.0 && cov_tot > 0).and_then(|s| {
+        // The rate the camera can follow: a frame has to stay up for one capture period and
+        // the time a frame change smears a capture (the screen's response, the exposure).
+        // Of the rates a 60 Hz screen shows evenly, the fastest within 0.7 of the camera's:
+        // 60 for a camera at 120, 30 at 60, 20 at 30. Advised when the sender is faster and
+        // what decodes on average is less than the slower rate would bring. Measured: a
+        // 120 Hz laptop screen to a camera at 120 gave 0.2–0.4 MB/s at 120 fps (9–42 %
+        // decoded) and 0.77 MB/s at 60; a 60 Hz monitor to Safari at 30 gave 248 KB/s at
+        // 30 fps (42 %) and 399 KB/s at 20 (80 %). An OLED phone at 30 fps to a camera at 30
+        // decoded 68 % on average: no gain from 20, and none is advised.
+        let n = [120.0, 60.0, 30.0, 20.0, 15.0, 12.0, 10.0].into_iter().find(|&n| n <= 0.7 * s.cam_fps)?;
+        (s.sender_fps > 1.15 * n && ok_slow < (0.9 * n / s.sender_fps) as f64).then_some((s, n as u32))
+    }) {
         (t(l, "tipFpsDown").replace("{cam}", &format!("{:.0}", s.cam_fps)).replace("{n}", &n.to_string()), false)
     } else if let Some(s) = st.filter(|s| s.tearing && s.span_secs > 2.0 && s.cam_fps > 0.0 && s.sender_fps > 0.95 * s.cam_fps) {
         // torn captures: past ~0.8 of the camera's rate, each tear costs more than a frame brings
@@ -430,6 +439,11 @@ fn recv_view(m: &Model) -> RecvView {
         let target = if s.tearing { 0.8 * s.cam_fps } else { s.cam_fps / 2.0 };
         let n = target.min(s.sender_fps * 1.5).round() as u32;
         (t(l, "tipFpsUp").replace("{n}", &n.to_string()), true)
+    } else if moving && st.is_some_and(|s| s.span_secs > 2.0 && s.captured > 0.9) && ok_slow > 0.6 && cell_n > 0 && cell >= 5.5 {
+        // It arrives and the cells are larger than the camera needs (4 pixels read as well as
+        // 6): with the frame rate at what the camera can follow, more data per frame is the way
+        // up
+        (t(l, "tipDenser").replace("{px}", &format!("{cell:.1}")), true)
     } else {
         (t(l, "tipGood").to_string(), true)
     };
