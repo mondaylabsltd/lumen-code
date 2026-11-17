@@ -6,10 +6,12 @@ Faster receiving. The Protocol 1.0 wire format is unchanged, and this version tr
 - The receiver scans every camera frame, each scan in about a quarter of the time, limits the exposure time, and keeps its rate on a warm phone.
 - The frame rate goes up to the screen's refresh rate; 60 is no longer a fixed top. The fastest transfer is at half the receiving camera's rate, and the receiver says so when the sender plays too fast.
 - A new desktop install starts at 60 FPS on the densest grid, four colours. The code must fill most of the receiving camera's picture; settings you chose are kept.
-- Phones: while scanning, the status and the panel turn with a phone held on its side.
-- Settings: each label sits next to its own control.
+- Phones: while scanning, the status and the panel turn with a phone held on its side. The panel is then one line over the bar and the scan frame is the screen's four corners, the same on iPhone, Android and the website.
+- Settings: each label sits next to its own control, and the row starts at the left edge.
 
-The Android changes of this version compile but were not run on a phone before release.
+1.1.1 follows 1.1.0 by an hour with the last two points completed: 1.1.0 had the compact panel on iPhone only, and its settings labels were right-aligned.
+
+Android: the release build was installed on a Redmi K40 (start, receive screen, camera, the layout on its side). Its receive rate was not measured.
 
 ## Desktop downloads
 
