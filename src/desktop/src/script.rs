@@ -56,6 +56,21 @@ pub async fn run(this: WeakEntity<Root>, cx: &mut AsyncWindowContext, script: St
                 eprintln!("[lumen-diag] {:?} {} {} · {} · {}{done} · build {} {}", v.recv.phase, v.recv.pct, v.recv.status, v.recv.diag, v.recv.tip, env!("CARGO_PKG_VERSION"), v.build);
             }
             "fps" => rt.dispatch(Event::SetFps { value: arg.parse().unwrap_or(30) }),
+            "density" => rt.dispatch(Event::SetDensity {
+                value: match arg {
+                    "low" => lumen_app::geometry::Density::Low,
+                    "high" => lumen_app::geometry::Density::High,
+                    "max" => lumen_app::geometry::Density::Max,
+                    _ => lumen_app::geometry::Density::Auto,
+                },
+            }),
+            "mode" => rt.dispatch(Event::SetMode { value: arg.parse().unwrap_or(1) }),
+            "ecc" => rt.dispatch(Event::SetEcc { value: arg.parse().unwrap_or(1) }),
+            "info" => {
+                let v = rt.view();
+                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                eprintln!("[lumen-info] t={secs} {} · {} · {}", v.send.title, v.send.subtitle, v.send.details);
+            }
             "settings" => rt.dispatch(Event::ToggleSettings),
             "play" => rt.dispatch(Event::TogglePlay),
             "accept" => rt.dispatch(Event::AcceptFlash),

@@ -89,7 +89,7 @@ const en: Legal = {
 				h: 'Transfer and flashing-light risks',
 				p: [
 					'Transfers are not encrypted or authenticated. Anyone who can see or record the code may read its content. Encrypt sensitive files first, and verify the sender independently.',
-					'The sending display changes colour up to 60 times per second. Do not look at it if you are sensitive to flashing light; stop using it if you feel unwell.'
+					'The sending display changes colour as often as the screen refreshes: up to 60 times per second on most screens, 120 or more on fast ones. Do not look at it if you are sensitive to flashing light; stop using it if you feel unwell.'
 				]
 			},
 			{
@@ -181,7 +181,7 @@ const zh: Legal = {
 				h: '传输与闪光风险',
 				p: [
 					'传输不加密，也不验证发送者身份。能看到或录下码的人可能读出内容；敏感文件请先加密，并另外确认来源。',
-					'发送画面每秒最多变色 60 次。对闪光敏感的人请勿注视；出现不适应立即停止使用。'
+					'发送画面的变色频率最高可达屏幕刷新率：多数屏幕为每秒 60 次，高刷新率屏幕为 120 次或更高。对闪光敏感的人请勿注视；出现不适应立即停止使用。'
 				]
 			},
 			{

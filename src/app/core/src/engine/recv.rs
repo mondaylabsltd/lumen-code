@@ -3,10 +3,16 @@
 //! of interest, per-frame codeword coverage, rolling statistics), so phones and desktops
 //! behave like the browser, minus the browser's copies.
 //!
-//! Each sender frame needs one good capture; more scans of the same frame only cost battery.
-//! After a frame is fully decoded the next scan waits ~3/4 of a sender frame period; after a
-//! repeat ~1/3; after a partial decode it runs at once. While searching it runs 5 times a
-//! second, and twice a second once nothing has been in view for 10 s (phone put down).
+//! While a code is in view every capture is scanned. A capture of a frame that is already
+//! complete costs a header read; one of a frame seen twice before, only the codewords still
+//! missing. The first two captures of a frame are read whole: a screen changes frames from
+//! top to bottom over several milliseconds, so a capture can carry a new header over cells
+//! that still show the frame before (and a camera with a slow shutter, the reverse). What a
+//! codeword's place decodes to is therefore compared with what that place gave last: the
+//! same packet again is the old frame, and is not booked to the new one.
+//!
+//! While searching, scans run 5 times a second, and twice a second once nothing has been in
+//! view for 10 s (phone put down).
 
 use super::image::{prepare, prepare_yuv, Crop, FrameRef};
 use lumen::scan::{FrameKey, Hint, Image, ScanResult, Scanner, SkipMap, YuvImage};
@@ -66,6 +72,8 @@ pub struct LiveStats {
     pub tearing: bool,
     /// The heat budget turned frames away in the last second.
     pub heat_limited: bool,
+    /// New packets per second over the last 2.5 s.
+    pub packet_rate: f32,
     pub session: SessionStats,
 }
 
@@ -157,6 +165,22 @@ struct FrameEntry {
     scans: u32,
 }
 
+/// Captures of a frame that are read whole before its decoded codewords are skipped.
+const WHOLE_SCANS: u32 = 2;
+/// The same on a warm phone: reading the second capture's decoded codewords again costs a
+/// sixth more scanning time for about one packet in a hundred (measured on phone captures
+/// of a 60 fps sender). Warm, that work is better left out; the rate stays.
+const WARM_WHOLE_SCANS: u32 = 1;
+
+/// A short name for a packet's bytes (FNV-1a), to tell a repeat from news.
+fn fingerprint(bytes: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for &b in bytes {
+        h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
 struct Rec {
     t: f64,
     ok: bool,
@@ -189,7 +213,6 @@ pub struct RecvEngine {
     pub generation: u64,
     pub finished: bool,
     last_dispatch: f64,
-    next_scan_at: f64,
     last_found_at: f64,
     sender_fps_est: f64,
     roi: Option<RoiState>,
@@ -219,6 +242,10 @@ pub struct RecvEngine {
     tokens_at: f64,
     /// When the heat budget last turned a frame away.
     heat_refused_at: f64,
+    /// Per codeword place: the packet it last gave that was news (fingerprint).
+    last_news: Vec<u64>,
+    /// When packets that were news arrived (for the rate).
+    news: VecDeque<(f64, u32)>,
 }
 
 impl Default for RecvEngine {
@@ -235,7 +262,6 @@ impl RecvEngine {
             generation: 0,
             finished: false,
             last_dispatch: f64::NEG_INFINITY,
-            next_scan_at: 0.0,
             last_found_at: f64::NEG_INFINITY,
             sender_fps_est: 0.0,
             roi: None,
@@ -257,6 +283,8 @@ impl RecvEngine {
             tokens: 0.0,
             tokens_at: 0.0,
             heat_refused_at: f64::NEG_INFINITY,
+            last_news: Vec::new(),
+            news: VecDeque::new(),
         }
     }
 
@@ -317,34 +345,27 @@ impl RecvEngine {
             return since >= 1000.0 / 5.0;
         }
         // the code is in view but nothing decodes (blur, glare, a bad exposure): such scans
-        // are the slowest (every reading is tried) and give nothing; look a few times a second
+        // give nothing; look a few times a second
         if self.yield_avg < 0.1 && since < 1000.0 / 8.0 {
             return false;
         }
-        if self.tearing() {
-            return true;
-        }
-        // locked to the sender: never more often than three times a sender frame
-        if since < self.sender_period() / 3.0 {
-            return false;
-        }
-        now >= self.next_scan_at
+        // in view and decoding: every capture (see the module text for what each costs)
+        true
     }
 
-    /// A warm phone throttles itself (and gets slower and hotter still): scan less, so it can
-    /// cool down first. The budget is scanning time, not scans: a phone that scans in 12 ms
-    /// heats little at 30 a second, one that needs 60 ms does at 25. A token bucket, so 24 a
-    /// second from a 30 fps camera skips one frame in five rather than every other one.
+    /// Heat. A warm phone (fair, serious) is left alone: a transfer lasts a minute or two,
+    /// the system guards the hardware itself, and scanning less is exactly the loss of rate
+    /// the person came to avoid. Only at the critical level, where the system is about to
+    /// act on its own (dim the screen, stop the camera), scanning is cut to a budget of
+    /// scanning time per second. A token bucket: the scans that remain are spread evenly.
     fn heat_allows(&mut self, now: f64) -> bool {
+        if self.heat < 3 {
+            return true;
+        }
         // seconds of scanning per second, all scanners together
-        let busy = match self.heat {
-            0 => return true,
-            1 => 1.5,
-            2 => 0.8,
-            _ => 0.4,
-        };
+        let busy = 0.4;
         let ms = if self.scan_ms.len() >= 5 { self.scan_ms.iter().sum::<f64>() / self.scan_ms.len() as f64 } else { 40.0 };
-        let budget = (busy * 1000.0 / ms.max(1.0)).max(5.0);
+        let budget = (busy * 1000.0 / ms.max(1.0)).clamp(5.0, 60.0);
         self.tokens = (self.tokens + (now - self.tokens_at).max(0.0) * budget / 1000.0).min(2.0);
         self.tokens_at = now;
         if self.tokens < 1.0 {
@@ -387,8 +408,6 @@ impl RecvEngine {
         };
         // (also forgets frames not seen for a while: their 8-bit seq comes round again)
         let skip = self.skip_map(now);
-        // a torn capture's codewords may belong to the next frame, whatever its header says
-        let skip = if self.tearing() { SkipMap::new() } else { skip };
         Plan { crop, captured_at: now, generation: self.generation, skip, fw, fh, rotation, track, prep_ms: 0.0, hint }
     }
 
@@ -427,16 +446,31 @@ impl RecvEngine {
         let (fw, fh) = (plan.fw, plan.fh);
         let kx = dw as f64 / crop.w as f64;
         let ky = dh as f64 / crop.h as f64;
-        let ms = plan.prep_ms + scan_ms;
         let current = plan.generation == self.generation;
+        let ms = plan.prep_ms + scan_ms;
 
+        // What decoded, and of that what is news: a place that gives the packet it gave last
+        // shows the frame it showed then (the same frame again, or the one before under a
+        // header that has already changed).
         let mut packets = Vec::new();
         let mut ok_idx = Vec::new();
+        let mut decoded = 0usize;
         if res.ok {
             for c in &res.codewords {
                 if let (true, Some(b)) = (c.ok, &c.bytes) {
-                    packets.push(b.clone());
-                    ok_idx.push(c.index);
+                    decoded += 1;
+                    let print = fingerprint(b);
+                    let known = current && self.last_news.get(c.index) == Some(&print);
+                    if !known {
+                        if current {
+                            if self.last_news.len() <= c.index {
+                                self.last_news.resize(c.index + 1, 0);
+                            }
+                            self.last_news[c.index] = print;
+                        }
+                        packets.push(b.clone());
+                        ok_idx.push(c.index);
+                    }
                 }
             }
         }
@@ -484,14 +518,22 @@ impl RecvEngine {
                 frame_rate = 1.0;
             } else if let Some(s) = stats {
                 if s.2 > 0 {
-                    frame_rate = ok_idx.len() as f64 / s.2 as f64;
+                    frame_rate = decoded as f64 / s.2 as f64;
                 }
+            }
+            if !packets.is_empty() {
+                self.news.push_back((now, packets.len() as u32));
+            }
+            while self.news.front().is_some_and(|n| now - n.0 > 2500.0) {
+                self.news.pop_front();
             }
             if let (true, Some(s), false) = (res.ok, stats, res.skipped) {
                 self.session.cell_sum += s.1;
                 self.session.cell_n += 1;
-                if s.2 > 0 {
-                    self.yield_avg = 0.7 * self.yield_avg + 0.3 * ok_idx.len() as f64 / s.2 as f64;
+                // of the codewords this scan tried (the rest were skipped as done)
+                let tried = res.stats.as_ref().map_or(0, |st| st.cw_total);
+                if tried > 0 {
+                    self.yield_avg = 0.7 * self.yield_avg + 0.3 * decoded as f64 / tried as f64;
                 }
             }
             if let (true, true, Some(st)) = (plan.track, res.ok, stats) {
@@ -499,7 +541,6 @@ impl RecvEngine {
             }
             if plan.track && plan.captured_at >= self.last_decision_at {
                 self.last_decision_at = plan.captured_at;
-                self.schedule(res.ok, res.skipped, res.frame_key, plan.captured_at);
                 self.update_roi(res.ok, stats.map(|s| (s.0, s.1)), fw, fh);
             }
             if res.ok {
@@ -528,28 +569,16 @@ impl RecvEngine {
         (report, packets)
     }
 
+    /// Codewords not to read again: those of frames that are complete, and of frames already
+    /// read whole [`WHOLE_SCANS`] times (once on a warm phone).
     fn skip_map(&mut self, now: f64) -> SkipMap {
         self.frame_done.retain(|_, e| now - e.first <= 4000.0);
-        self.frame_done.iter().filter(|(_, e)| now - e.first <= FRAME_KEY_MS).map(|(k, e)| (*k, e.ok.iter().copied().collect())).collect()
-    }
-
-    fn schedule(&mut self, ok: bool, skipped: bool, key: Option<FrameKey>, at: f64) {
-        let p = self.sender_period();
-        // After a partial decode the web demo rescans at once. Measured on real phone captures,
-        // the codewords a good capture misses fail the same way in the next ones (a region of
-        // glare, moiré or blur): rescans recovered ~0.3 packets each against ~34 from the next
-        // sender frame. So only a poor capture (likely torn or blurred) gets one quick retry.
-        self.next_scan_at = if !ok {
-            0.0
-        } else if skipped {
-            at + 0.33 * p
-        } else {
-            match key.and_then(|k| self.frame_done.get(&k)) {
-                Some(e) if e.total > 0 && e.ok.len() < e.total && e.scans < 2 && (e.ok.len() as f64) < 0.6 * e.total as f64 => 0.0,
-                Some(_) => at + 0.75 * p,
-                None => 0.0,
-            }
-        };
+        let whole = if self.heat == 0 { WHOLE_SCANS } else { WARM_WHOLE_SCANS };
+        self.frame_done
+            .iter()
+            .filter(|(_, e)| now - e.first <= FRAME_KEY_MS && (e.scans >= whole || (e.total > 0 && e.ok.len() >= e.total)))
+            .map(|(k, e)| (*k, e.ok.iter().copied().collect()))
+            .collect()
     }
 
     fn update_roi(&mut self, ok: bool, stats: Option<([[f64; 2]; 4], f64)>, fw: usize, fh: usize) {
@@ -629,6 +658,10 @@ impl RecvEngine {
         st.load = st.avg_ms * st.scan_fps / 1000.0 / self.workers.max(1) as f32;
         st.tearing = self.tearing();
         st.heat_limited = now - self.heat_refused_at < 1000.0;
+        st.packet_rate = match (self.news.front(), self.news.back()) {
+            (Some(a), Some(b)) if b.0 - a.0 > 300.0 => (self.news.iter().skip(1).map(|n| n.1).sum::<u32>() as f64 * 1000.0 / (b.0 - a.0)) as f32,
+            _ => 0.0,
+        };
         let s = &self.session;
         st.session = SessionStats {
             scans: s.scans,
@@ -640,5 +673,75 @@ impl RecvEngine {
             header: s.header,
         };
         st
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lumen::frame::Codeword;
+
+    fn result(seq: u32, total: usize, packets: &[(usize, u8)]) -> ScanResult {
+        let key = FrameKey { seq, x: 100, y: 60, mode: 1, n: 255, nsym: 40 };
+        ScanResult {
+            ok: true,
+            skipped: false,
+            reason: "",
+            candidates: 0,
+            header: Some(lumen::Header { mode: 1, x: 100, y: 60, n: 255, nsym: 40, seq }),
+            frame_key: Some(key),
+            codewords: packets.iter().map(|&(index, b)| Codeword { index, ok: true, skipped: false, corrected: 0, bytes: Some(vec![b; 20]) }).collect(),
+            stats: Some(lumen::scan::ScanStats { cell_px: 5.0, cw_total: total, cw_count: total, ..Default::default() }),
+            header_reused: false,
+        }
+    }
+
+    fn plan(rx: &mut RecvEngine, now: f64) -> Plan {
+        rx.plan(1920, 1080, 90, now, true).expect("a scan")
+    }
+
+    /// A capture taken while the screen changes frames: the new header over cells that still
+    /// show the frame before. What those cells give is not booked to the new frame, so the
+    /// next capture still reads them.
+    #[test]
+    fn the_old_frame_under_a_new_header_is_not_booked_to_the_new_one() {
+        let mut rx = RecvEngine::new();
+        rx.set_active(true, 0.0);
+        // frame 7, complete: places 0..4 give packets 10..14
+        let p = plan(&mut rx, 0.0);
+        let (_, got) = rx.finish(&p, &result(7, 4, &[(0, 10), (1, 11), (2, 12), (3, 13)]), 100, 100, 5.0, 1.0);
+        assert_eq!(got.len(), 4);
+        // header 8 at the top, places 0 and 1 new, places 2 and 3 still frame 7
+        let p = plan(&mut rx, 8.0);
+        let (rep, got) = rx.finish(&p, &result(8, 4, &[(0, 20), (1, 21), (2, 12), (3, 13)]), 100, 100, 5.0, 9.0);
+        assert_eq!(got, vec![vec![20u8; 20], vec![21u8; 20]], "only the news is passed on");
+        assert!((rep.frame_rate - 0.5).abs() < 1e-6, "frame 8 is half read");
+        // the next capture reads frame 8 whole (it is only its second), and places 2 and 3 give frame 8
+        let p = plan(&mut rx, 16.0);
+        assert!(!p.skip.keys().any(|k| k.seq == 8), "a frame read once is read whole again");
+        let (rep, got) = rx.finish(&p, &result(8, 4, &[(0, 20), (1, 21), (2, 22), (3, 23)]), 100, 100, 5.0, 17.0);
+        assert_eq!(got, vec![vec![22u8; 20], vec![23u8; 20]]);
+        assert!((rep.frame_rate - 1.0).abs() < 1e-6);
+        // complete: from now on the frame costs a header read
+        let p = plan(&mut rx, 24.0);
+        assert_eq!(p.skip.iter().find(|(k, _)| k.seq == 8).map(|(_, done)| done.len()), Some(4));
+    }
+
+    /// Warm and very warm phones scan every capture; the critical level scans to a budget.
+    #[test]
+    fn only_a_critical_phone_scans_less() {
+        for (heat, all) in [(0u8, true), (1, true), (2, true), (3, false)] {
+            let mut rx = RecvEngine::new();
+            rx.set_active(true, 0.0);
+            rx.heat = heat;
+            rx.last_found_at = 0.0;
+            let mut scans = 0;
+            for i in 0..240 {
+                let now = 100.0 + i as f64 * 1000.0 / 120.0;
+                rx.last_found_at = now;
+                scans += rx.plan(1920, 1080, 90, now, true).is_some() as u32;
+            }
+            assert_eq!(scans == 240, all, "heat {heat}: {scans} scans of 240 captures");
+        }
     }
 }

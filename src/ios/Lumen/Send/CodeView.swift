@@ -150,7 +150,9 @@ final class CodeUIView: UIView {
     /// 60 Hz is enough up to 30 fps; faster senders ask ProMotion screens for 120 Hz so every
     /// frame lasts the same number of refreshes.
     private static func range(for fps: UInt32) -> CAFrameRateRange {
-        fps > 30 ? CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120) : CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        // (the screen's own top rate, not a fixed 120: a faster screen is asked for all it has)
+        let top = Float(max(60, UIScreen.main.maximumFramesPerSecond))
+        return fps > 30 ? CAFrameRateRange(minimum: 60, maximum: top, preferred: top) : CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
     }
 
     private func stopLink() {

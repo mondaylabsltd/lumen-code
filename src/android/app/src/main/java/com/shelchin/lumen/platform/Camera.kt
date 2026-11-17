@@ -169,7 +169,8 @@ class LumenCamera(private val activity: ComponentActivity, private val core: Lum
     private fun rangeFor(fps: Int): Range<Int>? =
         ranges.firstOrNull { it.lower == fps && it.upper == fps } ?: ranges.filter { it.upper == fps }.maxByOrNull { it.lower }
 
-    private fun maxFps(): Int = if (rangeFor(60) != null) 60 else 30
+    /** The fastest rate an ordinary session of this camera offers (30 on many phones, 60, 120). */
+    private fun maxFps(): Int = ranges.map { it.upper }.filter { rangeFor(it) != null }.maxOrNull()?.coerceAtLeast(30) ?: 30
 
     fun start(index: Int, answer: (JsonObject) -> Unit) {
         val future = ProcessCameraProvider.getInstance(activity)

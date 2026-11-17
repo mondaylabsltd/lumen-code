@@ -37,15 +37,24 @@ pub struct Root {
     pub reader: Option<(u64, bool, Arc<ReaderContent>)>,
     pub image: Option<(u64, Arc<RenderImage>)>,
     awake: platform::KeepAwake,
-    /// The code area last reported to the core (points, points, scale); shared with the send
-    /// screen, which measures the area left above its bar and settings while drawing.
-    pub reported: Rc<Cell<(f32, f32, f32)>>,
+    /// The code area last reported to the core (points, points, scale, refresh rate); shared
+    /// with the send screen, which measures the area left above its bar and settings while drawing.
+    pub reported: Rc<Cell<(f32, f32, f32, f32)>>,
+    /// Refreshes per second of the display the window is on, as measured (0: not yet), and
+    /// that display: a window moved to another one is measured again.
+    pub refresh: Rc<Cell<f32>>,
+    measured_on: Option<gpui::DisplayId>,
     /// The receive panel's Details, folded at first and remembered (`platform::load_recv_details`).
     pub recv_details: bool,
     pub fps_slider: crate::theme::SliderState,
     /// Test runs (LUMEN_SCRIPT): frames shown per second, logged.
     flips: (Instant, u32),
+    /// Test runs: frames drawn (distinct, never drawn, drawn again) and the last one drawn.
+    drawn: (u32, u32, u32, Option<u32>),
 }
+
+pub static PAINT_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static PAINTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl Root {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -91,10 +100,13 @@ impl Root {
             reader: None,
             image: None,
             awake: platform::KeepAwake::default(),
-            reported: Rc::new(Cell::new((0., 0., 0.))),
+            reported: Rc::new(Cell::new((0., 0., 0., 0.))),
+            refresh: Rc::new(Cell::new(0.)),
+            measured_on: None,
             recv_details: platform::load_recv_details(),
             fps_slider: Default::default(),
             flips: (Instant::now(), 0),
+            drawn: (0, 0, 0, None),
         }
     }
 
@@ -193,8 +205,13 @@ impl Root {
         }
         self.flips.1 += 1;
         if self.flips.0.elapsed() >= Duration::from_secs(1) {
-            eprintln!("[lumen] {} frames/s (fps setting {})", self.flips.1, self.view.send.fps);
+            let (us, n) = (PAINT_US.swap(0, std::sync::atomic::Ordering::Relaxed), PAINTS.swap(0, std::sync::atomic::Ordering::Relaxed));
+            eprintln!(
+                "[lumen] {} frames/s (fps setting {}) · drawn {} · never drawn {} · drawn again {} · {} paints of {:.1} ms",
+                self.flips.1, self.view.send.fps, self.drawn.0, self.drawn.1, self.drawn.2, n, us as f64 / 1000.0 / n.max(1) as f64
+            );
             self.flips = (Instant::now(), 0);
+            self.drawn = (0, 0, 0, self.drawn.3);
         }
     }
 
@@ -387,7 +404,43 @@ impl Root {
         let size = window.viewport_size();
         let top = crate::theme::title_inset(window);
         let h = f32::from(size.height) - top - send::BAR_H;
-        report_area(&self.rt, &self.reported, f32::from(size.width), h, window.scale_factor());
+        report_area(&self.rt, &self.reported, f32::from(size.width), h, window.scale_factor(), self.refresh.get());
+    }
+
+    /// How fast the window's display refreshes, by counting its frames for half a second:
+    /// the one figure every platform gives the same way. The count is taken while the window
+    /// is the active one (an inactive window is drawn 30 times a second at most), and a
+    /// figure below 40 is taken for that and left out.
+    fn measure_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let display = window.display(cx).map(|d| d.id());
+        if display == self.measured_on || !window.is_window_active() {
+            return;
+        }
+        self.measured_on = display;
+        const FRAMES: usize = 48;
+        fn count(window: &Window, last: Option<Instant>, mut gaps: Vec<f32>, refresh: Rc<Cell<f32>>, view: gpui::EntityId) {
+            window.on_next_frame(move |window, cx| {
+                cx.notify(view); // keeps the frames coming
+                let now = Instant::now();
+                if let Some(t) = last {
+                    gaps.push((now - t).as_secs_f32());
+                }
+                if gaps.len() < FRAMES {
+                    return count(window, Some(now), gaps, refresh, view);
+                }
+                // the median gap: a frame that came late (the window was busy) does not count
+                gaps.sort_by(f32::total_cmp);
+                let hz = 1.0 / gaps[FRAMES / 2].max(1e-4);
+                if hz >= 40.0 {
+                    // displays refresh at one of a few rates; within 3 % of one, it is that one
+                    const RATES: [f32; 16] = [48., 50., 60., 72., 75., 90., 100., 120., 144., 165., 180., 200., 240., 300., 360., 480.];
+                    let known = RATES.iter().copied().find(|r| (hz - r).abs() <= 0.03 * r);
+                    refresh.set(known.unwrap_or(hz.round()));
+                }
+            });
+        }
+        count(window, None, Vec::with_capacity(FRAMES), self.refresh.clone(), cx.entity_id());
+        cx.notify();
     }
 
     pub fn toggle_recv_details(&mut self) {
@@ -422,7 +475,8 @@ impl Root {
                 "right" | "up" | "left" | "down" => {
                     let step = if m.shift { 5 } else { 1 };
                     let fps = send.fps as i32 + if matches!(key, "right" | "up") { step } else { -step };
-                    self.dispatch(Event::SetFps { value: fps.clamp(1, 120) as u32 });
+                    // (the core holds it to what this screen can play)
+                    self.dispatch(Event::SetFps { value: fps.max(1) as u32 });
                 }
                 _ => {}
             }
@@ -433,16 +487,16 @@ impl Root {
 }
 
 /// Tells the core the space the code may use (in points; sent in device pixels), once per change.
-pub fn report_area(rt: &Runtime, reported: &Cell<(f32, f32, f32)>, w: f32, h: f32, scale: f32) {
-    if (w, h, scale) == reported.get() {
+pub fn report_area(rt: &Runtime, reported: &Cell<(f32, f32, f32, f32)>, w: f32, h: f32, scale: f32, refresh: f32) {
+    if (w, h, scale, refresh) == reported.get() {
         return;
     }
-    reported.set((w, h, scale));
+    reported.set((w, h, scale, refresh));
     if std::env::var("LUMEN_SCRIPT").is_ok() {
-        eprintln!("[lumen] viewport {w}x{h} pt @{scale}");
+        eprintln!("[lumen] viewport {w}x{h} pt @{scale} · {refresh} Hz");
     }
     // ~0.25 mm per point: a typical laptop or desktop monitor
-    rt.dispatch(Event::Viewport { width_px: (w * scale) as f64, height_px: (h * scale) as f64, scale: scale as f64, mm_per_px: 0.25 / scale as f64 });
+    rt.dispatch(Event::Viewport { width_px: (w * scale) as f64, height_px: (h * scale) as f64, scale: scale as f64, mm_per_px: 0.25 / scale as f64, refresh_hz: refresh as f64 });
 }
 
 pub fn load_path(rt: &Runtime, path: &std::path::Path) -> bool {
@@ -458,7 +512,19 @@ pub fn load_path(rt: &Runtime, path: &std::path::Path) -> bool {
 
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.measure_refresh(window, cx);
         self.report_viewport(window);
+        if let (true, Some(f)) = (self.playing && std::env::var_os("LUMEN_SCRIPT").is_some(), &self.frame) {
+            match self.drawn.3 {
+                Some(last) if last == f.seq => self.drawn.2 += 1,
+                Some(last) => {
+                    self.drawn.0 += 1;
+                    self.drawn.1 += (f.seq + 256 - last - 1) & 255;
+                }
+                None => self.drawn.0 += 1,
+            }
+            self.drawn.3 = Some(f.seq);
+        }
         let screen = match self.view.screen {
             Screen::Home => home::render(self, window, cx).into_any_element(),
             Screen::Send => send::render(self, window, cx).into_any_element(),

@@ -37,11 +37,12 @@ plan: scan this frame? ──► crop + scale the region around the code ──�
        (pacing, heat)       (prepare_yuv, on the camera thread)        finish: statistics, pacing, region
 ```
 
-- **Pacing.** Normally scans are locked to the sender's frame rate: the capture right after each new sender frame is scanned. When captures are torn, because the sensor reads its rows over a large part of a sender frame (rolling shutter, reported by Android) or the camera is barely faster than the sender, every capture is scanned, since each one holds data no other capture has.
+- **Pacing.** While a code is in view every capture is scanned. A capture of a frame that is already complete costs a header read (about 1 ms). The first two captures of a frame are read whole (one on a warm phone), later ones only for the codewords still missing. A screen changes frames from top to bottom over several milliseconds, so a capture can carry a new header over cells of the frame before: a codeword place that gives the packet it gave last shows the old frame, and that packet is not booked to the new one.
 - **Searching.** With no code in view the core scans 15 times a second for the first two seconds, then 5 times, and 2 times after ten seconds. Searches run at half resolution, except every third one.
-- **Tracking.** The last code position narrows the finder search to four windows (10 cells around each corner) and the frame to a region of interest at about 6 camera pixels per cell.
-- **Camera mode.** The core asks for 60/120/240 fps when the sender plays fast enough and the camera offers it (`camera_mode`), 4K only for cells under about 4 pixels, and an exposure limit of a sixth of the sender's frame period (`camera_exposure`) so one capture holds one frame.
-- **Heat.** `Thermal { level }` (0–3) from the shell sets a time budget for the scanners: 1.5, 0.8 or 0.4 seconds of scanning per second. This barely slows a phone that scans a frame in 12 ms but does slow one that needs 60 ms. Hot phones also give up the camera modes above 60 fps, and the dashboard shows when the budget turns frames away.
+- **Tracking.** The last code position narrows the finder search to four windows (10 cells around each corner) and the frame to a region of interest at about 6 camera pixels per cell. The scanner itself keeps, from one capture to the next, where the alignment points were and the colours and gains the classifier ended with.
+- **Camera mode.** The core asks for the lowest capture rate that gives each sender frame about two captures, from 30 fps and its doublings up to whatever the camera reports (`camera_mode`; no rate is fixed), 4K only for cells under about 4 pixels, and an exposure limit of a sixteenth of the sender's frame period (`camera_exposure`: 1/1000 s at 60 fps) so that few captures blend two frames.
+- **Frame rate.** A sender plays at up to its screen's refresh rate, which the shell reports with the viewport (`refresh_hz`; 60 when unknown). The protocol's own limit is 240 fps: the frame number has 8 bits and names a frame for one second.
+- **Heat.** `Thermal { level }` (0–3) from the shell. A warm phone (levels 1 and 2) keeps its rate: a transfer lasts a minute or two and the system guards the hardware itself. Only at level 3 (critical) the scanners get a budget of 0.4 seconds of scanning per second and the camera modes above 60 fps are given up; the dashboard says so.
 
 ## Build and test
 
@@ -59,6 +60,7 @@ The shells' debug builds can save raw camera frames with `grab`, in the `frame-N
 | Example | What it does |
 |---|---|
 | `realframes -- <dir> [rounds]` | replays the frames through the receive engine: scans, time per scan, packets |
+| `grabstat -- <dir>` | what a run of consecutive captures holds: per capture the frame it shows and the codewords that decode, over the run the distinct packets (V=1: a line per capture) |
 | `scanprof -- <frame>` | times the scanner on one frame at full resolution, without and with a tracking hint |
 | `failmap -- <dir>` | where on the code the codewords fail (tilt, glare, a torn frame) |
 | `rolling -- <sender fps> <camera fps> <skew ms>` | simulates a rolling-shutter camera watching a sender |

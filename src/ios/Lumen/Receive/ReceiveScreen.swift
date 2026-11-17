@@ -1,4 +1,6 @@
+import CoreMotion
 import SwiftUI
+import UIKit
 
 /// The receiver (the web's recv page): start screen, live camera with a small panel, result.
 /// While scanning, nothing covers the middle of the picture: the back button and status at
@@ -7,10 +9,8 @@ import SwiftUI
 struct ReceiveScreen: View {
     @Environment(AppModel.self) private var model
     let view: ViewModel
-    /// The bottom panel's height with the camera tools: the guides end above it.
-    @State private var dockHeight: CGFloat = 180
-
-    private static let dockBottom: CGFloat = 6
+    /// How the phone is held, for the panel over the live picture.
+    @State private var tilt = Tilt()
 
     var body: some View {
         let r = view.recv
@@ -21,28 +21,14 @@ struct ReceiveScreen: View {
                     .ignoresSafeArea()
             }
             if r.phase == "scanning" {
-                // where to put the code; once one is found its outline takes over
-                Guides()
-                    .padding(.top, 62)
-                    .padding(.bottom, dockHeight + Self.dockBottom + 18)
-                    .opacity(r.live ? 0 : 1)
-                    .animation(.easeOut(duration: 0.3), value: r.live)
-                    .debugFrame("guides")
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    VStack(spacing: 10) {
-                        if r.zoom != nil || r.canSwitch {
-                            CamTools(recv: r)
-                        }
-                        Hud(recv: r)
-                            .debugFrame("panel")
-                    }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { dockHeight = $0 }
+                // A code on a monitor is wide: the phone is turned on its side to fill the
+                // picture with it, usually with the rotation lock on. The status and the panel
+                // turn with the phone, so that they read upright either way.
+                Turned(quarter: tilt.quarter) {
+                    ScanChrome(recv: r)
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, Self.dockBottom)
-                .frame(maxWidth: 560)
-                .frame(maxWidth: .infinity)
+                .onAppear { tilt.start() }
+                .onDisappear { tilt.stop() }
             }
             if r.phase == "start" {
                 StartPane(recv: r)
@@ -54,37 +40,173 @@ struct ReceiveScreen: View {
         }
         .overlay(alignment: .top) {
             // the done screen keeps the way out (the core keeps the result until "receive
-            // another"); the full-screen reader carries the button in its own header
-            if r.phase != "done" || r.done?.reader == false {
-                HStack(spacing: 10) {
-                    HomeButton { model.dispatch(Ev.navigate(.home)) }
-                    if r.phase == "scanning" {
-                        HStack(spacing: 8) {
-                            StatusDot(live: r.live)
-                            Text(r.status).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(Theme.panelOpaque))
-                        .overlay(Capsule().stroke(Theme.line, lineWidth: 1))
-                        .accessibilityElement(children: .combine)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
-                .debugFrame("topbar")
+            // another"); the full-screen reader carries the button in its own header.
+            // While scanning the bar belongs to the layer that turns with the phone.
+            if r.phase != "scanning" && (r.phase != "done" || r.done?.reader == false) {
+                TopBar(recv: r)
             }
         }
         .animation(.easeOut(duration: 0.2), value: r.phase)
     }
 }
 
-/// Four corner brackets: the frame to put the sender's code in.
-private struct Guides: View {
+/// The way home and, while scanning, the status.
+private struct TopBar: View {
+    @Environment(AppModel.self) private var model
+    let recv: RecvVM
+    /// The camera tools at the end of the bar (a wide, low screen has no room for them above the panel).
+    var tools = false
+    /// Space at both ends (more when the corners hold the scan frame).
+    var side: CGFloat = 14
+
+    var body: some View {
+        HStack(spacing: 10) {
+            HomeButton { model.dispatch(Ev.navigate(.home)) }
+            if recv.phase == "scanning" {
+                HStack(spacing: 8) {
+                    StatusDot(live: recv.live)
+                    Text(recv.status).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Theme.panelOpaque))
+                .overlay(Capsule().stroke(Theme.line, lineWidth: 1))
+                .accessibilityElement(children: .combine)
+            }
+            if tools {
+                CamTools(recv: recv)
+            } else {
+                Spacer()
+            }
+        }
+        .padding(.horizontal, side)
+        .padding(.top, 8)
+        .debugFrame("topbar")
+    }
+}
+
+/// Everything over the live picture while scanning: the bar at the top, the corner guides,
+/// the camera tools and the panel at the bottom. Nothing covers the middle.
+private struct ScanChrome: View {
+    let recv: RecvVM
+    /// The bottom panel's height with the camera tools: the guides end above it.
+    @State private var dockHeight: CGFloat = 180
+
+    private static let dockBottom: CGFloat = 6
+
     var body: some View {
         GeometryReader { g in
-            let inset = max(22, g.size.width * 0.05)
+            // On its side the screen is wide and low, and the code fills it: the panel becomes
+            // one line and a bar, and the camera tools move up into the top bar.
+            let compact = g.size.width > g.size.height
+            let tools = recv.zoom != nil || recv.canSwitch
+            ZStack {
+                // Where to put the code; once one is found its outline takes over. Upright,
+                // the frame is the space between the bar and the panel. On its side the code
+                // is meant to fill the screen: the frame is the screen's four corners, and
+                // the bar and the panel keep clear of them.
+                Guides(inset: compact ? 0 : nil)
+                    .padding(.top, compact ? 6 : 62)
+                    .padding(.bottom, compact ? 6 : dockHeight + Self.dockBottom + 18)
+                    .padding(.horizontal, compact ? 6 : 0)
+                    .opacity(recv.live ? 0 : 1)
+                    .animation(.easeOut(duration: 0.3), value: recv.live)
+                    .debugFrame("guides")
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    VStack(spacing: 10) {
+                        if tools && !compact {
+                            CamTools(recv: recv)
+                        }
+                        Hud(recv: recv, compact: compact)
+                            .debugFrame("panel")
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { dockHeight = $0 }
+                }
+                .padding(.horizontal, compact ? 48 : 10)
+                .padding(.bottom, Self.dockBottom)
+                .frame(maxWidth: compact ? 720 : 560)
+                .frame(maxWidth: .infinity)
+            }
+            .frame(width: g.size.width, height: g.size.height)
+            .overlay(alignment: .top) { TopBar(recv: recv, tools: tools && compact, side: compact ? 48 : 14) }
+        }
+    }
+}
+
+/// How the phone is held, read from gravity: it works with the rotation lock on, when the
+/// interface itself stays upright. 0: as the interface is; 1 and -1: a quarter turn
+/// clockwise / anticlockwise brings the content upright.
+@MainActor
+@Observable
+final class Tilt {
+    private(set) var quarter = 0
+    @ObservationIgnored private let motion = CMMotionManager()
+
+    func start() {
+        guard motion.isAccelerometerAvailable, !motion.isAccelerometerActive else { return }
+        motion.accelerometerUpdateInterval = 0.2
+        motion.startAccelerometerUpdates(to: .main) { [weak self] data, _ in
+            guard let a = data?.acceleration else { return }
+            MainActor.assumeIsolated { self?.update(x: a.x, y: a.y) }
+        }
+    }
+
+    func stop() {
+        motion.stopAccelerometerUpdates()
+        quarter = 0
+    }
+
+    /// Gravity along the screen's axes, in g (x to the right, y up; upright: y = -1).
+    private func update(x: Double, y: Double) {
+        var q = quarter
+        if abs(x) > 0.75 && abs(y) < 0.5 {
+            q = x < 0 ? 1 : -1 // on its side: the right edge up, or the left
+        } else if y < -0.75 {
+            q = 0 // upright
+        }
+        // (flat on a table, upside down, in between: as it was)
+        // an interface that has turned by itself (rotation lock off) needs nothing added
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        if let o = scene?.interfaceOrientation, !o.isPortrait {
+            q = 0
+        }
+        if q != quarter {
+            quarter = q
+        }
+    }
+}
+
+/// Lays `content` out for the space as it is when the phone is held on its side (width and
+/// height exchanged) and turns it a quarter, so that it fills the same space, upright.
+private struct Turned<Content: View>: View {
+    let quarter: Int
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        if quarter == 0 {
+            content
+        } else {
+            // (inside the safe area: the turned content keeps clear of the island and the
+            // home indicator, which are now at its sides)
+            GeometryReader { g in
+                content
+                    .frame(width: g.size.height, height: g.size.width)
+                    .rotationEffect(.degrees(Double(quarter) * 90))
+                    .position(x: g.size.width / 2, y: g.size.height / 2)
+            }
+        }
+    }
+}
+
+/// Four corner brackets: the frame to put the sender's code in.
+private struct Guides: View {
+    /// Space left and right of the frame; nil: a twentieth of the width.
+    var inset: CGFloat? = nil
+
+    var body: some View {
+        GeometryReader { g in
+            let inset = inset ?? max(22, g.size.width * 0.05)
             if g.size.height > 70 && g.size.width > 2 * inset + 70 {
                 GuideCorners()
                     .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 3, lineCap: .butt))
@@ -152,68 +274,54 @@ private struct CamTools: View {
 }
 
 /// Name and percentage, progress, speed and time left, one tip; the rest under Details.
+/// `compact` (a wide, low screen): name, speed and percentage on one line over the bar.
 private struct Hud: View {
     @Environment(AppModel.self) private var model
     let recv: RecvVM
+    var compact = false
     /// Folded at first; the choice is remembered.
     @AppStorage("lumen.recv.details") private var details = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(recv.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                Spacer()
-                Text(recv.pct).font(Theme.mono(22, .bold)).foregroundStyle(Theme.text).contentTransition(.numericText())
-            }
-            .padding(.bottom, 10)
-            .accessibilityElement(children: .combine)
-            GeometryReader { g in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.08))
-                    Capsule().fill(Theme.spectrum).frame(width: max(0, g.size.width * CGFloat(recv.progress)))
-                        .animation(.easeOut(duration: 0.25), value: recv.progress)
+            if compact {
+                HStack(alignment: .center, spacing: 10) {
+                    Text(recv.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                    Text(recv.line).font(.system(size: 13)).monospacedDigit().foregroundStyle(Theme.muted).lineLimit(1).layoutPriority(1)
+                    Spacer(minLength: 0)
+                    Text(recv.pct).font(Theme.mono(18, .bold)).foregroundStyle(Theme.text).contentTransition(.numericText()).layoutPriority(2)
+                    detailsButton(label: false)
                 }
-            }
-            .frame(height: 8)
-            .accessibilityHidden(true)
-            // keeps its height while the line is empty (the Details button holds it)
-            HStack(spacing: 10) {
-                Text(recv.line)
-                    .font(.system(size: 13.5))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                Button {
-                    withAnimation(.easeOut(duration: 0.2)) { details.toggle() }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(model.t("details"))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 11, weight: .semibold))
-                            .rotationEffect(.degrees(details ? 180 : 0))
-                    }
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(Theme.muted)
-                    .padding(.leading, 12)
-                    .padding(.trailing, 10)
-                    .frame(minHeight: 34)
-                    .background(Capsule().fill(Color.white.opacity(0.04)))
-                    .overlay(Capsule().stroke(Theme.line2, lineWidth: 1))
-                    .padding(.vertical, 5)
-                    .contentShape(Rectangle())
+                .padding(.bottom, 6)
+                bar.frame(height: 6)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(recv.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Text(recv.pct).font(Theme.mono(22, .bold)).foregroundStyle(Theme.text).contentTransition(.numericText())
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(model.t("details"))
-                .accessibilityAddTraits(details ? .isSelected : [])
+                .padding(.bottom, 10)
+                .accessibilityElement(children: .combine)
+                bar.frame(height: 8)
+                // keeps its height while the line is empty (the Details button holds it)
+                HStack(spacing: 10) {
+                    Text(recv.line)
+                        .font(.system(size: 13.5))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    detailsButton(label: true)
+                }
+                .padding(.top, 4)
             }
-            .padding(.top, 4)
             if details || !recv.tipOk {
                 Text(recv.tip)
                     .font(.system(size: 13))
                     .foregroundStyle(recv.tipOk ? Theme.muted : Theme.amber)
                     .lineLimit(1)
                     .frame(minHeight: 18, alignment: .leading)
+                    .padding(.top, compact ? 6 : 0)
             }
             if details {
                 VStack(alignment: .leading, spacing: 8) {
@@ -231,15 +339,53 @@ private struct Hud: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 10)
+                .padding(.top, compact ? 8 : 10)
                 .overlay(alignment: .top) { Rectangle().fill(Theme.line).frame(height: 1) }
-                .padding(.top, 10)
+                .padding(.top, compact ? 8 : 10)
                 .transition(.opacity)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, compact ? 14 : 16)
+        .padding(.vertical, compact ? 9 : 14)
         .panel(opaque: true)
+    }
+
+    private var bar: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.08))
+                Capsule().fill(Theme.spectrum).frame(width: max(0, g.size.width * CGFloat(recv.progress)))
+                    .animation(.easeOut(duration: 0.25), value: recv.progress)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func detailsButton(label: Bool) -> some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.2)) { details.toggle() }
+        } label: {
+            HStack(spacing: 4) {
+                if label {
+                    Text(model.t("details"))
+                }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .rotationEffect(.degrees(details ? 180 : 0))
+            }
+            .font(.system(size: 12.5))
+            .foregroundStyle(Theme.muted)
+            .padding(.leading, label ? 12 : 10)
+            .padding(.trailing, 10)
+            .frame(minHeight: label ? 34 : 30)
+            .background(Capsule().fill(Color.white.opacity(0.04)))
+            .overlay(Capsule().stroke(Theme.line2, lineWidth: 1))
+            .padding(.vertical, label ? 5 : 0)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(model.t("details"))
+        .accessibilityAddTraits(details ? .isSelected : [])
     }
 }
 

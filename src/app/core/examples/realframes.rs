@@ -8,8 +8,11 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let dir = &args[1];
     let rounds: usize = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(20);
+    // milliseconds between captures (DT=8.33 for a 120 fps grab)
+    let dt: f64 = std::env::var("DT").ok().and_then(|v| v.parse().ok()).unwrap_or(33.3);
+    let quiet = std::env::var("QUIET").is_ok();
     let mut frames = Vec::new();
-    for i in 1..=64 {
+    for i in 1..=400 {
         let Ok(d) = std::fs::read(format!("{dir}/frame-{i}.nv12")) else { continue };
         let u = |k: usize| u32::from_le_bytes(d[k * 4..k * 4 + 4].try_into().unwrap()) as usize;
         let (w, h, ys, uvs) = (u(0), u(1), u(2), u(3));
@@ -58,7 +61,7 @@ fn main() {
                 scans += 1;
                 total += ms;
                 cw += packets.len() as u32;
-                if r == 0 || r == rounds - 1 {
+                if !quiet && (r == 0 || r == rounds - 1) {
                     eprintln!(
                         "t={now:6.0} ok={} skipped={} packets={} cell={:.1} ms={ms:.1} rate={:.2} corners={:?}",
                         rep.ok, rep.skipped, packets.len(), rep.stats.cell, rep.frame_rate,
@@ -66,7 +69,7 @@ fn main() {
                     );
                 }
             }
-            now += 33.3;
+            now += dt;
         }
     }
     println!("{scans} scans, {:.2} ms avg, {} packets, {:.1} s wall", total / scans.max(1) as f64, cw, t0.elapsed().as_secs_f64());

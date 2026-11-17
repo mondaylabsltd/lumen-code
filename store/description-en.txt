@@ -18,7 +18,7 @@ LOCAL PROCESSING
 The app makes no network connections and collects no data. Files and camera images are processed on your device. The protocol and source code are available under the MIT License.
 
 BEFORE YOU TRANSFER
-The displayed code is not encrypted or authenticated. Encrypt sensitive files first and check their source. The code changes colour up to 60 times a second; do not look at it if you are sensitive to flashing light. The app asks for confirmation before the first playback.
+The displayed code is not encrypted or authenticated. Encrypt sensitive files first and check their source. The code changes colour as often as the screen refreshes (up to 60 times a second on most screens, 120 on fast ones); do not look at it if you are sensitive to flashing light. The app asks for confirmation before the first playback.
 
 Privacy: https://lumencode.link/privacy
 Support: hello@mondaylabs.ltd

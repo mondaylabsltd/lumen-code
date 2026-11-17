@@ -126,7 +126,7 @@ final class AppModel {
         case "camera_mode":
             camera.setMode(fps: Int(op.fps ?? 30), uhd: op.uhd ?? false)
         case "camera_exposure":
-            break // iOS auto exposure keeps exposures short at 60 fps and above
+            camera.setMaxExposure(us: Int(op.maxUs ?? 0))
         case "pick_file":
             pendingPick = r.id
             showFileImporter = true

@@ -23,10 +23,16 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         set { rotationLock.lock(); _rotation = newValue; rotationLock.unlock() }
     }
     private var zoom: CGFloat = 1
+    /// Longest exposure auto exposure may use, in microseconds (0: the camera's own limit).
+    private var maxExposureUs = 0
     #if DEBUG
-    /// Debug: raw frames still to write to Documents (frame-N.nv12) for offline profiling.
+    /// Debug: raw frames still to keep (written to Documents/<tag>/frame-N.nv12 once all are in
+    /// memory, so that consecutive captures are kept even at 240 fps).
     var dumpRemaining = 0
-    private var dumped = 0
+    private var exposurePinned = false
+    private var dumpTag = ""
+    private var dumpFrames: [(Double, Data)] = []
+    private var dumpInfo = "-"
     #endif
     /// The device in use (main-thread reads for the preview's rotation coordinator).
     private(set) var device: AVCaptureDevice?
@@ -126,10 +132,22 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         let zMin = Float(dev.minAvailableVideoZoomFactor)
         let zMax = Float(min(dev.maxAvailableVideoZoomFactor, dev.minAvailableVideoZoomFactor * 8))
         zoom = dev.videoZoomFactor
-        let maxFps = [240, 120, 60].first { Self.format(for: dev, width: 1920, fps: Double($0)) != nil } ?? 30
+        // the fastest 1080p mode this camera has, whatever it is (240 today)
+        let maxFps = Self.maxRate(for: dev, width: 1920)
         let uhd = Self.format(for: dev, width: 3840, fps: 30) != nil
         reply(["type": "camera", "ok": true, "zoomMin": zMin, "zoomMax": zMax, "zoom": Float(dev.videoZoomFactor), "devices": all.count,
                "maxFps": maxFps, "uhd": uhd])
+    }
+
+    /// The highest capture rate among the formats [`format(for:width:fps:)`] would accept.
+    private static func maxRate(for dev: AVCaptureDevice, width: Int32) -> Int {
+        let rates = dev.formats.filter { f in
+            let d = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
+            let sub = CMFormatDescriptionGetMediaSubType(f.formatDescription)
+            return d.width == width && d.height * 16 == width * 9 && !f.isVideoBinned
+                && (sub == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange || sub == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+        }.flatMap { $0.videoSupportedFrameRateRanges.map { Int($0.maxFrameRate.rounded()) } }
+        return max(30, rates.max() ?? 30)
     }
 
     /// A 16:9 4:2:0 format of the given width (1920 or 3840) that reaches `fps`: full sensor
@@ -173,13 +191,49 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
                 let d = CMTime(value: 1, timescale: CMTimeScale(rate))
                 dev.activeVideoMinFrameDuration = d
                 dev.activeVideoMaxFrameDuration = d
+                self.applyMaxExposure(dev) // a new format forgets the limit
             } catch {}
         }
     }
 
+    /// Caps the exposure time (the gain follows by itself). A capture that stays open across a
+    /// frame change of the sender holds a blend of both frames; at 120 fps auto exposure would
+    /// otherwise use the whole 8 ms.
+    func setMaxExposure(us: Int, pin: Bool = false) {
+        queue.async {
+            #if DEBUG
+            // a test script's value stays until the script changes it
+            if self.exposurePinned && !pin { return }
+            self.exposurePinned = pin
+            #endif
+            self.maxExposureUs = us
+            guard let dev = self.device else { return }
+            do {
+                try dev.lockForConfiguration()
+                self.applyMaxExposure(dev)
+                dev.unlockForConfiguration()
+            } catch {}
+        }
+    }
+
+    /// Call with the device locked for configuration.
+    private func applyMaxExposure(_ dev: AVCaptureDevice) {
+        guard maxExposureUs > 0 else {
+            dev.activeMaxExposureDuration = .invalid // the format's default
+            return
+        }
+        let f = dev.activeFormat
+        let want = CMTime(value: CMTimeValue(maxExposureUs), timescale: 1_000_000)
+        dev.activeMaxExposureDuration = min(max(want, f.minExposureDuration), f.maxExposureDuration)
+    }
+
     #if DEBUG
-    func grab(_ n: Int) {
-        queue.async { self.dumpRemaining = n }
+    func grab(_ n: Int, tag: String = "") {
+        queue.async {
+            self.dumpTag = tag
+            self.dumpFrames = []
+            self.dumpRemaining = n
+        }
     }
     #endif
 
@@ -215,14 +269,32 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
         #if DEBUG
         if dumpRemaining > 0 {
             dumpRemaining -= 1
-            dumped += 1
             // header: width, height, y stride, uv stride (u32 LE), then the planes
             var head = [UInt32(CVPixelBufferGetWidth(pb)), UInt32(CVPixelBufferGetHeight(pb)), UInt32(yStride), UInt32(uvStride)]
             var data = Data(bytes: &head, count: 16)
             data.append(Data(bytes: y, count: yStride * yRows))
             data.append(Data(bytes: uv, count: uvStride * uvRows))
-            let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("frame-\(dumped).nv12")
-            try? data.write(to: url)
+            if dumpFrames.isEmpty, let d = device {
+                // the mode the run starts in (a script may change it before the run is written)
+                dumpInfo = String(format: "exp %.6f iso %.0f fps %.0f", d.exposureDuration.seconds, d.iso, 1 / max(d.activeVideoMinFrameDuration.seconds, 1e-6))
+            }
+            dumpFrames.append((CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds, data))
+            if dumpRemaining == 0 {
+                let (frames, tag, info) = (dumpFrames, dumpTag, dumpInfo)
+                dumpFrames = []
+                DispatchQueue.global(qos: .utility).async {
+                    var dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    if !tag.isEmpty { dir = dir.appendingPathComponent(tag) }
+                    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    var times = info + "\n"
+                    for (i, f) in frames.enumerated() {
+                        try? f.1.write(to: dir.appendingPathComponent("frame-\(i + 1).nv12"))
+                        times += String(format: "%d %.6f\n", i + 1, f.0)
+                    }
+                    try? times.write(to: dir.appendingPathComponent("times.txt"), atomically: true, encoding: .utf8)
+                    print("[lumen-grab] \(frames.count) frames in \(dir.lastPathComponent)")
+                }
+            }
         }
         #endif
         let frame = CameraFrame(

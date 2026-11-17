@@ -24,7 +24,7 @@ At the default 12 frames per second, a laptop screen sends roughly 80–125 KB/s
 
 Online: <https://lumencode.link>. Open **Send** on the sending screen and choose a file, then open **Receive** on the receiving phone. Both pages work on phones and desktops. Nothing is installed, and the file never leaves the two devices.
 
-> **Photosensitivity warning:** while sending, the code flashes and changes colour up to 60 times a second. People who are sensitive to flashing light should not look at it. The web pages and the native apps show this warning before a code plays.
+> **Photosensitivity warning:** while sending, the code flashes and changes colour as often as the screen refreshes (up to 60 times a second on most screens, 120 or more on fast ones). People who are sensitive to flashing light should not look at it. The web pages and the native apps show this warning before a code plays.
 
 - **Sender:** sends a file, or text typed or pasted in (File | Text tabs). Settings: density (low / auto / high / max), 4 or 8 colours, ECC level, frame rate, engine. Tapping the code hides or shows the controls.
 - **Receiver:** text and images open in a full-screen reader (JSON is formatted and syntax-highlighted, links are clickable, text size is adjustable); files can be saved or opened. While scanning it shows progress, speed, cell size in camera pixels, success rate, and a diagnostics line (engine time, camera fps, scans/s, new frames/s, sender fps, capture rate) with hints. When the transfer completes, the camera turns off and the statistics stay available. Pinch on the image to zoom, if the camera supports it. [Reading the dashboard](docs/guide/05-dashboard.md) explains every number.
@@ -42,7 +42,7 @@ bun run build          # prerendered pages and a Cloudflare Worker in .svelte-ki
 
 ## Native apps (iOS, Android, desktop)
 
-The native apps do the same transfer on one shared Rust core ([`src/app`](src/app/README.md): app logic, scan pipeline and the protocol crate). Each platform shell only draws the UI and calls the platform. The apps look and behave like the web pages, and add what native code allows: camera planes read in place, capture at up to 120 fps on iPhone and 60 fps on Android, following the sender's rate, the app's own exposure control on Android, frame timing locked to 120 Hz screens, haptics, screen brightness, and less work when the phone gets hot.
+The native apps do the same transfer on one shared Rust core ([`src/app`](src/app/README.md): app logic, scan pipeline and the protocol crate). Each platform shell only draws the UI and calls the platform. The apps look and behave like the web pages, and add what native code allows: camera planes read in place, capture at the camera's fastest rate when the sender plays fast enough to need it (no fixed limit: 240 fps on a current iPhone, whatever an Android camera offers), short exposures set by the app, playback at up to the screen's refresh rate, haptics, screen brightness, and full speed on a warm phone (work is cut only at the critical heat level).
 
 | App | Shell | Build and run | Guide |
 |---|---|---|---|

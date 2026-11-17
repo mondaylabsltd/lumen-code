@@ -17,7 +17,7 @@ To test sending:
 
 Opening a file with Lumen Code on iOS, or sharing a file to Lumen Code on Android, selects that file for sending.
 
-The sending code changes colour up to 60 times a second. The app waits for photosensitivity confirmation before the first playback.
+The sending code changes colour as often as the screen refreshes: up to 60 times a second on most screens, 120 on fast ones. The app waits for photosensitivity confirmation before the first playback.
 
 The installed app makes no network connections and collects no data. Camera frames and transferred content are processed locally. The website only needs internet access to load its pages; the file transfer itself does not use a network.
 

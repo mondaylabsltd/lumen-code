@@ -27,17 +27,22 @@ pub fn render(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) -> i
     let top = title_inset(window);
     // Nothing is ever drawn over the code: it gets the space above the settings and the bar,
     // measured here and reported to the core, which fits the grid (quiet zone and corners) to it.
-    let (rt, reported) = (root.rt.clone(), root.reported.clone());
+    let (rt, reported, refresh) = (root.rt.clone(), root.reported.clone(), root.refresh.clone());
     let code = (root.layout.clone(), root.frame.clone());
     let area = div().id("code").flex_1().min_h_0().w_full().overflow_hidden().child(
         canvas(|_, _, _| {}, move |bounds, _, window, _| {
             let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-            crate::app::report_area(&rt, &reported, w, h, window.scale_factor());
+            crate::app::report_area(&rt, &reported, w, h, window.scale_factor(), refresh.get());
             if let (Some(layout), Some(frame)) = &code {
                 // One layer: its primitives share one z-order, so GPUI does not index
                 // tens of thousands of cells in its bounds tree every frame (that
                 // indexing was nearly all of the CPU time). Insertion order stacks them.
-                window.paint_layer(bounds, |window| paint_code(bounds, layout, frame, window))
+                let t = std::time::Instant::now();
+                window.paint_layer(bounds, |window| paint_code(bounds, layout, frame, window));
+                if std::env::var_os("LUMEN_SCRIPT").is_some() {
+                    crate::app::PAINT_US.fetch_add(t.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
+                    crate::app::PAINTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }
         })
         .size_full(),
@@ -334,11 +339,11 @@ fn settings(root: &Root, window: &Window) -> AnyElement {
     let s = &root.view.send;
     let rt = root.rt.clone();
     let (d1, d2, d3, f1) = (rt.clone(), rt.clone(), rt.clone(), rt.clone());
-    // the web's grid: as many columns of at least 330 pt as fit, 24 pt apart
+    // the web's grid: as many columns of at least 330 pt as fit, 40 pt apart
     let size = window.viewport_size();
     let avail = f32::from(size.width) - 20.0;
-    let cols = ((avail + 24.0) / (330.0 + 24.0)).floor().max(1.0);
-    let field_w = ((avail - 24.0 * (cols - 1.0)) / cols).floor();
+    let cols = ((avail + 40.0) / (330.0 + 40.0)).floor().max(1.0);
+    let field_w = ((avail - 40.0 * (cols - 1.0)) / cols).floor();
     let label_w = if field_w < 300.0 { 84.0 } else { 112.0 };
     let field = |label: &str, el: AnyElement| {
         div()
@@ -346,7 +351,9 @@ fn settings(root: &Root, window: &Window) -> AnyElement {
             .flex()
             .items_center()
             .gap(px(10.))
-            .child(div().w(px(label_w)).flex_none().text_size(px(13.)).text_color(c(MUTED)).child(label.to_string()))
+            // the label ends at its control (right-aligned in its column): it reads as the name
+            // of what follows, and stays clear of the control before it
+            .child(div().w(px(label_w)).flex_none().text_right().text_size(px(13.)).text_color(c(MUTED)).child(label.to_string()))
             .child(div().flex_1().min_w_0().child(el))
     };
     let fps = s.fps;
@@ -354,7 +361,7 @@ fn settings(root: &Root, window: &Window) -> AnyElement {
     let fields = div()
         .flex()
         .flex_wrap()
-        .gap_x(px(24.))
+        .gap_x(px(40.))
         .gap_y(px(8.))
         .child(field(
             root.t("density"),
@@ -385,7 +392,7 @@ fn settings(root: &Root, window: &Window) -> AnyElement {
                 .flex()
                 .items_center()
                 .gap(px(10.))
-                .child(slider(&root.fps_slider, fps as f32, 4.0, 60.0, slider_w, move |v, _, _| f1.dispatch(Event::SetFps { value: v as u32 })))
+                .child(slider(&root.fps_slider, fps as f32, 4.0, s.fps_max.max(5) as f32, slider_w, move |v, _, _| f1.dispatch(Event::SetFps { value: v as u32 })))
                 .child(div().w(px(26.)).flex_none().text_right().font_family(MONO).text_size(px(13.)).font_weight(FontWeight::BOLD).child(format!("{fps}")))
                 .into_any_element(),
         ));

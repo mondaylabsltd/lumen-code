@@ -283,35 +283,24 @@ function sourceSize() {
   return [video.videoWidth, video.videoHeight];
 }
 
-// Frame-locked scanning. Each sender frame needs one good capture; more scans of the same
-// frame only cost battery. After a frame is fully decoded, wait ~3/4 of a sender frame
-// period; after a repeat, ~1/3; after a partial decode, rescan at once.
+// While a code is in view every camera frame is scanned (as the apps do, src/app/core/src/
+// engine/recv.rs). A capture of a frame that is already complete costs a header read; one
+// of a frame seen twice before, only the codewords still missing. The first two captures
+// of a frame are read whole: a screen changes frames from top to bottom over several
+// milliseconds, so a capture can carry a new header over cells that still show the frame
+// before. What a codeword's place decodes to is therefore compared with what that place
+// gave last (lastNews): the same packet again is the old frame, not booked to the new one.
 let lastDispatch = 0;
 let senderFpsEst = 0;
-let nextScanAt = 0;
-let lastDecisionAt = 0; // capture time of the newest result used for scheduling
+const WHOLE_SCANS = 2;
+const lastNews = []; // per codeword place: the fingerprint of the last packet that was news
 const captureAt = new Map(); // scan id -> capture time
-function senderPeriod() {
-  return 1000 / (senderFpsEst > 0 ? senderFpsEst : 12);
-}
 function scanDue(now) {
   if (finished) return now - lastDispatch >= 1000 / 3;
   // searching: 5 scans/s, and 2/s once nothing has been in view for 10 s (phone put down)
   if (now - lastFoundAt > 10000) return now - lastDispatch >= 1000 / 2;
   if (now - lastFoundAt > 2000) return now - lastDispatch >= 1000 / 5;
-  if (now - lastDispatch < Math.min(1000 / 30, senderPeriod() / 3)) return false;
-  return now >= nextScanAt;
-}
-function schedule(d, capturedAt) {
-  if (capturedAt < lastDecisionAt) return; // an older capture finished late
-  lastDecisionAt = capturedAt;
-  const P = senderPeriod();
-  if (!d.ok) nextScanAt = 0;
-  else if (d.skipped) nextScanAt = capturedAt + 0.33 * P;
-  else {
-    const e = d.frameKey && frameDone.get(d.frameKey);
-    nextScanAt = e && e.total && e.ok.size >= e.total ? capturedAt + 0.75 * P : 0;
-  }
+  return true;
 }
 
 function pump() {
@@ -335,7 +324,7 @@ function skipMap() {
   const out = {};
   for (const [key, e] of frameDone) {
     if (now - e.first > 4000) frameDone.delete(key);
-    else if (now - e.first <= FRAME_KEY_MS) out[key] = [...e.ok];
+    else if (now - e.first <= FRAME_KEY_MS && (e.scans >= WHOLE_SCANS || (e.total && e.ok.size >= e.total))) out[key] = [...e.ok];
   }
   return out;
 }
@@ -412,7 +401,6 @@ function onResult(w, d) {
     console.warn(d.error);
     if (d.wasmError) wasmFailed(d.error);
     else if (useBitmap && ++workerErrors >= 2) useBitmap = false; // no OffscreenCanvas 2D in workers
-    nextScanAt = 0;
     return;
   }
   const now = performance.now();
@@ -434,23 +422,27 @@ function onResult(w, d) {
     let e = frameDone.get(d.frameKey);
     if (e && now - e.first > FRAME_KEY_MS) e = null; // the seq came round: a new frame
     if (!e) {
-      e = { t: now, first: now, ok: new Set(), seq: d.header.seq, total: d.stats ? d.stats.cwCount : 0 };
+      e = { t: now, first: now, ok: new Set(), seq: d.header.seq, total: d.stats ? d.stats.cwCount : 0, scans: 0 };
       frameDone.set(d.frameKey, e);
       session.frames++;
       session.covTot += e.total;
     }
     e.t = now;
-    for (const i of d.okIdx || []) {
+    e.scans++;
+    (d.okIdx || []).forEach((i, k) => {
+      // the packet this place gave last: the same frame again, or the one before under a new header
+      const print = d.prints ? d.prints[k] : undefined;
+      if (print !== undefined && lastNews[i] === print && !e.ok.has(i)) return;
+      lastNews[i] = print;
       if (!e.ok.has(i)) session.covOk++;
       e.ok.add(i);
-    }
+    });
     session.header = d.header;
   }
   if (d.ok && d.stats && !d.skipped) {
     session.cellSum += d.stats.cellPx;
     session.cellN++;
   }
-  schedule(d, capturedAt);
   updateCrop(d, capturedAt);
   const rec = { t: now, ok: d.ok, cwOk: 0, cwTotal: 0, cell: 0, skipped: !!d.skipped };
   if (d.ok) {

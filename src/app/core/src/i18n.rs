@@ -56,7 +56,7 @@ const DICT: &[(&str, &str, &str)] = &[
     ("choose", "选择文件", "Choose file"),
     ("sendText", "发送文本", "Send text"),
     ("dropHint", "调高屏幕亮度，接收端正对屏幕。", "Turn the brightness up; keep the receiver square to the screen."),
-    ("flashWarn", "码每秒最多闪烁 60 次，对闪光敏感的人请勿注视。", "The code flashes up to 60 times a second. If flashing light affects you, don’t look at it."),
+    ("flashWarn", "码每秒最多闪烁 {n} 次，对闪光敏感的人请勿注视。", "The code flashes up to {n} times a second. If flashing light affects you, don’t look at it."),
     ("textPh", "输入或粘贴文字", "Type or paste text"),
     ("density", "密度", "Density"),
     ("dAuto", "自动", "Auto"),
@@ -163,9 +163,9 @@ const DICT: &[(&str, &str, &str)] = &[
     ("fullscreen", "全屏", "Full screen"),
     ("language", "中 / EN", "中 / EN"),
     ("sendingNow", "正在发送", "Sending"),
-    ("tipHot", "手机发热：相机已降到 60 帧，散热后再提高发送帧率", "The phone is warm: the camera is held at 60 fps; raise the sender FPS once it cools"),
+    ("tipHot", "手机过热：相机已降到 60 帧，降温后恢复", "The phone is too hot: the camera is held at 60 fps until it cools"),
     ("tipFpsDown", "这台相机每秒只拍 {cam} 帧：发送端调到约 {n} 帧反而更快", "This camera takes {cam} frames a second: about {n} fps on the sender is faster"),
-    ("tipHotScan", "手机发热：已放慢识别，让它降温", "The phone is warm: scanning less often so it can cool down"),
+    ("tipHotScan", "手机过热：已放慢识别，让它降温", "The phone is too hot: scanning less often so it can cool down"),
     ("tipParallel", "让手机与屏幕平行：码的远端正在变小、变模糊", "Hold the phone parallel to the screen: the far side of the code is small and blurred"),
 ];
 

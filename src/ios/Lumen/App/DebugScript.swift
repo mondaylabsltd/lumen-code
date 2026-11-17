@@ -14,7 +14,11 @@ import UIKit
 /// orient:<portrait|landscape>, layout:<name> (frames of the marked views, JSON in Documents),
 /// details (the receive panel's Details), forgetflash (ask about flashing at the next launch), file:<name>:<bytes> (a demo file with that name),
 /// accept (the photosensitivity warning), camera, close, event:<json>, json (sample JSON text), image (a generated PNG),
-/// capture:<n> (keep n sender frames, upscaled), feed (decode the kept frames as images).
+/// capture:<n> (keep n sender frames, upscaled), feed (decode the kept frames as images),
+/// grab:<n>[:<tag>] (n consecutive raw captures to Documents[/<tag>]), watch:<seconds>[:<label>]
+/// (a line a second in Documents/watch.txt: heat, camera mode, the receive dashboard), watchreset,
+/// exposure:<µs> (pin the longest exposure; 0: the camera's own), cammode:<fps>[:uhd],
+/// cleanup (remove what grab, watch and snap left in Documents).
 @MainActor
 enum DebugScript {
     private static var captured: [(Int, Int, Data)] = []
@@ -124,7 +128,62 @@ enum DebugScript {
                     let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                     try? model.core.view().write(to: dir.appendingPathComponent("view-\(arg.isEmpty ? "dump" : arg).json"), atomically: true, encoding: .utf8)
                 case "grab":
-                    model.camera.grab(Int(arg) ?? 6)
+                    // grab:<n>[:<tag>] keeps n consecutive raw captures in Documents[/<tag>]
+                    let parts = arg.split(separator: ":").map(String.init)
+                    model.camera.grab(Int(parts.first ?? "") ?? 6, tag: parts.count > 1 ? parts[1] : "")
+                case "exposure":
+                    model.camera.setMaxExposure(us: Int(arg) ?? 0, pin: true)
+                case "cammode":
+                    // cammode:<fps>[:uhd]
+                    let parts = arg.split(separator: ":").map(String.init)
+                    model.camera.setMode(fps: Int(parts.first ?? "") ?? 30, uhd: parts.count > 1)
+                case "cleanup":
+                    // removes what grab, watch and snap left in Documents
+                    let fm = FileManager.default
+                    let dir = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    var freed = 0
+                    for item in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] {
+                        let name = item.lastPathComponent
+                        let grabbed = (try? fm.contentsOfDirectory(atPath: item.path))?.contains { $0.hasSuffix(".nv12") } ?? false
+                        if grabbed || name.hasSuffix(".nv12") || name == "watch.txt" || name.hasPrefix("snap-") || name == "times.txt" {
+                            try? fm.removeItem(at: item)
+                            freed += 1
+                        }
+                    }
+                    print("[lumen-script] cleanup: \(freed) items removed")
+                case "watchreset":
+                    let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    try? "".write(to: dir.appendingPathComponent("watch.txt"), atomically: true, encoding: .utf8)
+                case "watch":
+                    // one line a second for <arg> seconds: heat, camera mode, the receive dashboard
+                    let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    let url = dir.appendingPathComponent("watch.txt")
+                    // watch:<seconds>[:<label>]; the file grows until `watchreset`
+                    let wparts = arg.split(separator: ":").map(String.init)
+                    let label = wparts.count > 1 ? wparts[1] + " " : ""
+                    if !FileManager.default.fileExists(atPath: url.path) { try? "".write(to: url, atomically: true, encoding: .utf8) }
+                    for _ in 0..<(Int(wparts.first ?? "") ?? 60) {
+                        try? await Task.sleep(for: .milliseconds(1000))
+                        let thermal = ["nominal", "fair", "serious", "critical"][ProcessInfo.processInfo.thermalState.rawValue]
+                        var cam = "-"
+                        if let d = model.camera.device {
+                            let dim = CMVideoFormatDescriptionGetDimensions(d.activeFormat.formatDescription)
+                            let fps = d.activeVideoMinFrameDuration.seconds > 0 ? 1 / d.activeVideoMinFrameDuration.seconds : 0
+                            cam = String(format: "%dx%d@%.0f exp 1/%.0f iso %.0f zoom %.2f", dim.width, dim.height, fps, 1 / max(d.exposureDuration.seconds, 1e-6), d.iso, d.videoZoomFactor)
+                        }
+                        var line = "\(label)t=\(Int(Date().timeIntervalSince1970)) \(thermal) | \(cam)"
+                        if let o = try? JSONSerialization.jsonObject(with: Data(model.core.view().utf8)) as? [String: Any], let r = o["recv"] as? [String: Any] {
+                            let metrics = (r["metrics"] as? [[String: Any]] ?? []).map { "\($0["label"] ?? "") \($0["value"] ?? "")" }.joined(separator: ", ")
+                            line += " | \(r["phase"] ?? "") \(r["pct"] ?? "") | \(r["diag"] ?? "") | \(metrics) | \(r["tip"] ?? "")"
+                            if let d = r["done"] as? [String: Any] { line += " | DONE \(d["sub"] ?? "")" }
+                        }
+                        print("[lumen-watch] \(line)")
+                        if let h = try? FileHandle(forWritingTo: url) {
+                            h.seekToEndOfFile()
+                            h.write(Data((line + "\n").utf8))
+                            try? h.close()
+                        }
+                    }
                 case "bench":
                     let n = UInt32(arg) ?? 300
                     let thermal = ["nominal", "fair", "serious", "critical"][ProcessInfo.processInfo.thermalState.rawValue]

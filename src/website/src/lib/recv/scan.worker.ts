@@ -63,11 +63,15 @@ worker.onmessage = async (e: MessageEvent) => {
 		}
 		const packets: Uint8Array[] = [];
 		const okIdx: number[] = [];
+		const prints: number[] = []; // a short name for each packet's bytes (FNV-1a), to tell a repeat from news
 		if (res.ok)
 			for (const c of res.codewords)
 				if (c.ok) {
 					packets.push(c.bytes);
 					okIdx.push(c.index);
+					let h = 0x811c9dc5;
+					for (let i = 0; i < c.bytes.length; i++) h = Math.imul(h ^ c.bytes[i], 0x01000193);
+					prints.push(h >>> 0);
 				}
 		worker.postMessage(
 			{
@@ -85,6 +89,7 @@ worker.onmessage = async (e: MessageEvent) => {
 				frameKey: res.frameKey || null,
 				skipped: !!res.skipped,
 				okIdx,
+				prints,
 				stats: res.ok ? res.stats : null,
 				packets
 			},

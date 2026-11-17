@@ -79,6 +79,8 @@ data class SendVM(
     val stats: List<StatVM>,
     val playing: Boolean,
     val fps: Int,
+    /** The fastest this screen can play: the top of the speed control. */
+    val fpsMax: Int = 60,
     val dockVisible: Boolean,
     val settingsOpen: Boolean,
     val density: String,
@@ -151,8 +153,9 @@ object Ev {
     fun start(locale: String) = buildJsonObject { put("type", "start"); put("locale", locale); put("platform", "android") }
     fun navigate(screen: String) = buildJsonObject { put("type", "navigate"); put("screen", screen) }
     val toggleLang = e("toggle_lang")
-    fun viewport(w: Double, h: Double, scale: Double, mmPerPx: Double) = buildJsonObject {
+    fun viewport(w: Double, h: Double, scale: Double, mmPerPx: Double, refreshHz: Double) = buildJsonObject {
         put("type", "viewport"); put("widthPx", w); put("heightPx", h); put("scale", scale); put("mmPerPx", mmPerPx)
+        put("refreshHz", refreshHz)
     }
     fun appActive(on: Boolean) = buildJsonObject { put("type", "app_active"); put("active", on) }
     fun thermal(level: Int) = buildJsonObject { put("type", "thermal"); put("level", level) }

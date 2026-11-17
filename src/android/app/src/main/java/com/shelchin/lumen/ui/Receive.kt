@@ -2,6 +2,19 @@ package com.shelchin.lumen.ui
 
 import android.view.ViewGroup
 import android.content.Context
+import android.content.res.Configuration
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.view.Surface
+import android.view.WindowManager
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.Constraints
+import kotlin.math.abs
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.heightIn
@@ -98,21 +111,102 @@ fun ReceiveScreen(model: AppModel, v: ViewModel) {
                 OutlineLayer(model)
             }
         }
-        if (r.phase == "scanning") ScanningLayer(model, r)
+        if (r.phase == "scanning") {
+            // A code on a monitor is wide: the phone is turned on its side to fill the picture
+            // with it, usually with auto-rotate off. The status and the panel turn with the
+            // phone, so that they read upright either way.
+            Turned(rememberTilt()) {
+                ScanningLayer(model, r)
+                TopBar(model, r)
+            }
+        }
         if (r.phase == "start") StartPane(model, r)
         if (r.phase == "done") r.done?.let { DoneScreen(model, it) }
-        if (r.phase != "done") {
-            Row(
-                Modifier.windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                HomeButton(model.t("home")) { model.dispatch(Ev.navigate("home")) }
-                if (r.phase == "scanning") Chip {
-                    StatusDot(r.live)
-                    Label(r.status, size = 13.sp, weight = FontWeight.SemiBold, lines = 1)
-                }
+        if (r.phase == "start") TopBar(model, r)
+    }
+}
+
+/** The way home and, while scanning, the status (clear of the corners that hold the scan frame). */
+@Composable
+private fun TopBar(model: AppModel, r: RecvVM) {
+    BoxWithConstraints(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
+        val side = if (r.phase == "scanning" && maxWidth > maxHeight) 48.dp else 10.dp
+        Row(
+            Modifier.padding(horizontal = side, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            HomeButton(model.t("home")) { model.dispatch(Ev.navigate("home")) }
+            if (r.phase == "scanning") Chip {
+                StatusDot(r.live)
+                Label(r.status, size = 13.sp, weight = FontWeight.SemiBold, lines = 1)
             }
+        }
+    }
+}
+
+/**
+ * How the phone is held, read from gravity: it works with auto-rotate off, when the interface
+ * itself stays upright. 0: as the interface is; 1 and -1: a quarter turn clockwise /
+ * anticlockwise brings the content upright. Only for an interface in its natural, upright
+ * position: one that has turned by itself needs nothing added.
+ */
+@Composable
+private fun rememberTilt(): Int {
+    val context = LocalContext.current
+    val upright = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
+    var quarter by remember { mutableIntStateOf(0) }
+    DisposableEffect(upright) {
+        val sensors = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        val gravity = sensors?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        val windows = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(e: SensorEvent) {
+                // along the screen's axes, in g (x to the right, y up; upright: y = 1)
+                val x = e.values[0] / SensorManager.GRAVITY_EARTH
+                val y = e.values[1] / SensorManager.GRAVITY_EARTH
+                var q = quarter
+                if (abs(x) > 0.75f && abs(y) < 0.5f) {
+                    q = if (x > 0) 1 else -1 // on its side: the right edge up, or the left
+                } else if (y > 0.75f) {
+                    q = 0 // upright
+                }
+                // (flat on a table, upside down, in between: as it was)
+                @Suppress("DEPRECATION")
+                val turned = (windows?.defaultDisplay?.rotation ?: Surface.ROTATION_0) != Surface.ROTATION_0
+                if (!upright || turned) q = 0
+                if (q != quarter) quarter = q
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        if (gravity != null) sensors.registerListener(listener, gravity, SensorManager.SENSOR_DELAY_UI)
+        onDispose {
+            sensors?.unregisterListener(listener)
+            quarter = 0
+        }
+    }
+    return quarter
+}
+
+/**
+ * Lays `content` out for the space as it is when the phone is held on its side (width and
+ * height exchanged) and turns it a quarter, so that it fills the same space, upright. Turned,
+ * the content stays inside the safe area: the cutout and the gesture bar are then at its sides.
+ */
+@Composable
+private fun Turned(quarter: Int, content: @Composable () -> Unit) {
+    if (quarter == 0) {
+        Box(Modifier.fillMaxSize()) { content() }
+        return
+    }
+    Layout(
+        content = { Box(Modifier.graphicsLayer { rotationZ = 90f * quarter }) { content() } },
+        modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+    ) { measurables, constraints ->
+        val placeable = measurables.first().measure(Constraints.fixed(constraints.maxHeight, constraints.maxWidth))
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            placeable.place((constraints.maxWidth - placeable.width) / 2, (constraints.maxHeight - placeable.height) / 2)
         }
     }
 }
@@ -177,19 +271,18 @@ private fun ScanningLayer(model: AppModel, r: RecvVM) {
         var dockHeight by remember { mutableIntStateOf(0) }
         val dockH = with(LocalDensity.current) { dockHeight.toDp() }
         if (!r.live) {
+            // Upright, the frame is the space between the bar and the panel. On its side the
+            // code is meant to fill the screen: the frame is the screen's four corners, and
+            // the bar and the panel keep clear of them.
             Guides(
-                Modifier.fillMaxSize().padding(
-                    top = 62.dp,
-                    bottom = if (landscape) 18.dp else dockH + 6.dp + 18.dp,
-                    start = 22.dp,
-                    end = if (landscape) dockWidth + 10.dp + 22.dp else 22.dp,
-                ),
+                if (landscape) Modifier.fillMaxSize().padding(6.dp)
+                else Modifier.fillMaxSize().padding(top = 62.dp, bottom = dockH + 6.dp + 18.dp, start = 22.dp, end = 22.dp),
             )
         }
         Column(
             Modifier
                 .align(if (landscape) Alignment.BottomEnd else Alignment.BottomCenter)
-                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .padding(horizontal = if (landscape) 48.dp else 10.dp, vertical = 6.dp)
                 .width(dockWidth)
                 .onSizeChanged { dockHeight = it.height },
             verticalArrangement = Arrangement.spacedBy(10.dp),

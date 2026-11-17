@@ -28,29 +28,31 @@ describe('settings the apps offer', () => {
 		expect(webLevels).toEqual([...Array(appMax + 1).keys()]);
 	});
 
-	it('frame rate: the web controls use the app core range', () => {
+	it('frame rate: no fixed top; the screen sets it, the protocol bounds it', () => {
+		const sender = read('src/website/src/lib/send/sender.svelte.ts');
 		const min = num(/pub const MIN_FPS: u32 = (\d+)/, coreApp);
-		const max = num(/pub const MAX_FPS: u32 = (\d+)/, coreApp);
-		expect([num(/min="(\d+)"/, sendPage), num(/max="(\d+)"/, sendPage)]).toEqual([min, max]);
+		const ceiling = num(/pub const FPS_CEILING: u32 = (\d+)/, coreApp);
+		expect(num(/min="(\d+)"/, sendPage)).toBe(min);
+		// the control goes up to the refresh rate measured on this screen
+		expect(sendPage).toContain('max={tx.fpsMax}');
+		expect(sendPage).not.toMatch(/max="\d+"/);
+		// below 256 frames a second: the 8-bit frame number names a frame for one second
+		expect(num(/export const FPS_CEILING = (\d+)/, sender)).toBe(ceiling);
+		expect(ceiling).toBeLessThan(256);
 	});
 
-	it('phone cameras: the fastest capture a sender can ask for (README)', () => {
-		const maxFps = num(/pub const MAX_FPS: u32 = (\d+)/, coreApp);
-		// the core's capture bands: (camera fps, sender fps from which it is chosen, …)
-		const bands = [
-			...(/const BANDS[^=]*= \[([^;]*)\];/.exec(coreApp)?.[1] ?? '').matchAll(/\((\d+), ([\d.]+),/g)
-		].map((m) => [Number(m[1]), Number(m[2])]);
-		expect(bands.length).toBeGreaterThan(1);
-		// faster bands exist for faster senders, but no Lumen Code sender plays above MAX_FPS
-		const iphone = Math.max(...bands.filter(([, from]) => from <= maxFps).map(([fps]) => fps));
-		const android = num(/maxFps\(\): Int = if \(rangeFor\((\d+)\)/, androidCamera);
-		expect(read('README.md')).toContain(
-			`up to ${iphone} fps on iPhone and ${android} fps on Android`
+	it('phone cameras: the capture rate follows the camera, not a table (README)', () => {
+		// the core steps through 30 and its doublings up to what the camera reports
+		expect(coreApp).toContain('fn capture_rates(camera_max: u32)');
+		expect(coreApp).not.toMatch(/const BANDS/);
+		// Android reports the fastest rate of its ordinary sessions, iOS of its 1080p formats
+		expect(androidCamera).toContain('ranges.map { it.upper }');
+		expect(read('src/ios/Lumen/Receive/Camera.swift')).toContain(
+			'Self.maxRate(for: dev, width: 1920)'
 		);
-		expect(read('README.zh-CN.md')).toContain(
-			`iPhone 最高 ${iphone} 帧，Android 最高 ${android} 帧`
-		);
-		// the screen refresh rate is not a code rate: codes change at most MAX_FPS times a second
+		expect(read('README.md')).toContain("capture at the camera's fastest rate");
+		expect(read('README.zh-CN.md')).toContain('用相机的最高帧率采集');
+		// the screen refresh rate is not a figure the home page states
 		for (const lang of LANGS) expect(page(lang)).not.toMatch(/\bHz\b/);
 	});
 

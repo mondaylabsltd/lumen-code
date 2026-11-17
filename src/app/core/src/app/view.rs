@@ -60,6 +60,8 @@ pub struct SendView {
     pub playing: bool,
     /// Frames per second the shell flips at while playing.
     pub fps: u32,
+    /// The fastest this screen can play (its refresh rate): the top of the speed control.
+    pub fps_max: u32,
     pub dock_visible: bool,
     pub settings_open: bool,
     pub density: Density,
@@ -190,6 +192,7 @@ fn send_view(m: &Model) -> SendView {
         }
         None => (String::new(), String::new()),
     };
+    let fps_max = super::max_fps(m.refresh_hz);
     let mut stats = Vec::new();
     // under the name in the bar: size and time per pass (or "Paused"); details in settings
     let mut subtitle = size.clone();
@@ -198,7 +201,7 @@ fn send_view(m: &Model) -> SendView {
         stats.push(Stat { label: t(l, "preparing").into(), value: String::new(), wide: false });
     }
     if let (SendPhase::Ready, Some(info)) = (s.phase, &s.info) {
-        let fps = m.prefs.fps as f64;
+        let fps = m.prefs.fps.min(fps_max) as f64;
         let per = info.bytes_per_frame as f64;
         let rate = per * fps;
         let pass = if rate > 0.0 { info.payload_len as f64 / rate } else { 0.0 };
@@ -239,7 +242,8 @@ fn send_view(m: &Model) -> SendView {
         text_meta,
         drop_desc: t(l, if mobile { "dropDescMobile" } else { "dropDesc" }).into(),
         drop_hint: t(l, if mobile { "dropHintMobile" } else { "dropHint" }).into(),
-        flash_warn: t(l, "flashWarn").into(),
+        // (as fast as this screen can play, which is what the speed control goes up to)
+        flash_warn: t(l, "flashWarn").replace("{n}", &fps_max.to_string()),
         flash_ask: s.phase == SendPhase::Ready && !m.prefs.flash_ok,
         text: s.text.clone(),
         title,
@@ -248,7 +252,8 @@ fn send_view(m: &Model) -> SendView {
         details,
         stats,
         playing: s.playing,
-        fps: m.prefs.fps,
+        fps: m.prefs.fps.min(fps_max),
+        fps_max,
         dock_visible: s.dock_visible,
         settings_open: settings_open(m),
         density: m.prefs.density,
@@ -403,7 +408,7 @@ fn recv_view(m: &Model) -> RecvView {
         (t(l, "tipParallel").to_string(), false)
     } else if !moving && cov_tot > 0 && ok_rate < 0.5 {
         (t(l, if cell < 4.5 { "tipSteady" } else { "tipColor" }).to_string(), false)
-    } else if m.thermal >= 2 && r.camera.on && r.camera.max_fps > 60 && r.camera.fps <= 60 {
+    } else if m.thermal >= 3 && r.camera.on && r.camera.max_fps > 60 && r.camera.fps <= 60 {
         (t(l, "tipHot").to_string(), false)
     } else if st.is_some_and(|s| s.heat_limited) {
         (t(l, "tipHotScan").to_string(), false)

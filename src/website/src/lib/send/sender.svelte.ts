@@ -21,6 +21,9 @@ const DENSITY = { low: 0.72, auto: 1, high: 1.3, max: 1.65 } as const;
 export const TEXT_NAME = 'message.txt';
 
 export type Density = keyof typeof DENSITY;
+/** The protocol's own limit: the frame number has 8 bits and names a frame for one second. */
+export const FPS_CEILING = 240;
+
 export type Engine = 'js' | 'wasm';
 export interface Prefs {
 	density: Density;
@@ -153,9 +156,32 @@ export class SendController {
 	private geoKey = ''; // the geometry the canvas was last set up for
 	private wakeLock: WakeLockSentinel | null = null;
 	shownFrames = 0;
+	/** The fastest this screen can play: its refresh rate, measured (60 until then). */
+	fpsMax = $state(60);
+
+	// How fast the screen refreshes, from the gaps between 40 animation frames (the median: a
+	// late frame does not count). Nothing else caps the rate but the protocol's own limit.
+	private measureRefresh() {
+		const gaps: number[] = [];
+		let last = 0;
+		const step = (ts: number) => {
+			if (last) gaps.push(ts - last);
+			last = ts;
+			if (gaps.length < 40) return requestAnimationFrame(step);
+			gaps.sort((a, b) => a - b);
+			const hz = 1000 / Math.max(1, gaps[20]);
+			if (hz < 40) return; // a tab in the background is throttled: not the screen's rate
+			const known = [48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 180, 200, 240].find(
+				(r) => Math.abs(hz - r) <= 0.03 * r
+			);
+			this.fpsMax = Math.min(FPS_CEILING, known ?? Math.round(hz));
+		};
+		requestAnimationFrame(step);
+	}
 
 	constructor() {
 		this.prefs = loadPrefs();
+		this.measureRefresh();
 		const e = new URLSearchParams(location.search).get('engine');
 		if (e) this.prefs.engine = e === 'wasm' ? 'wasm' : 'js';
 	}
@@ -238,7 +264,7 @@ export class SendController {
 	schedule() {
 		clearTimeout(this.tickTimer);
 		if (!this.sender || !this.playing) return;
-		const period = 1000 / this.prefs.fps;
+		const period = 1000 / this.fps;
 		const wait = this.nextFlipAt - performance.now() - 20;
 		if (period > 40 && wait > 0)
 			this.tickTimer = window.setTimeout(() => requestAnimationFrame(this.tick), wait);
@@ -247,7 +273,7 @@ export class SendController {
 
 	private tick = (ts: number) => {
 		if (!this.sender || !this.playing) return;
-		const period = 1000 / this.prefs.fps;
+		const period = 1000 / this.fps;
 		// start, or after a pause or a stall: from now
 		if (!this.nextFlipAt || ts - this.nextFlipAt > 2 * period) this.nextFlipAt = ts;
 		if (ts + 4 >= this.nextFlipAt) {
@@ -298,7 +324,7 @@ export class SendController {
 	private updateStats() {
 		if (!this.sender) return;
 		const per = this.sender.bytesPerFrame();
-		const rate = per * this.prefs.fps;
+		const rate = per * this.fps;
 		const L = this.sender.layout;
 		this.stats = {
 			rate,
@@ -336,8 +362,13 @@ export class SendController {
 		else this.setupCanvas();
 	}
 
+	/** The rate in force: the chosen one, held to what this screen can play. */
+	get fps() {
+		return Math.min(this.prefs.fps, this.fpsMax);
+	}
+
 	setFps(fps: number) {
-		this.prefs.fps = fps;
+		this.prefs.fps = Math.max(4, Math.min(fps, this.fpsMax));
 		this.schedule();
 		this.savePrefs();
 		this.updateStats();

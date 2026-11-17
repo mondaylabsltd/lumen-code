@@ -162,7 +162,16 @@ private fun CodeArea(model: AppModel, s: SendVM, modifier: Modifier) {
             val dm = context.resources.displayMetrics
             // physical pixel size; some devices report a nonsense xdpi, fall back to the density bucket
             val dpi = if (abs(dm.xdpi - dm.densityDpi) / dm.densityDpi < 0.3f) dm.xdpi else dm.densityDpi.toFloat()
-            model.dispatch(Ev.viewport(w.toDouble(), h.toDouble(), density.toDouble(), 25.4 / dpi))
+            // the fastest mode this screen has is the fastest the code can play (60, 90, 120, 144…)
+            // (the mode the app asks for while a code plays: the fastest at this resolution)
+            @Suppress("DEPRECATION")
+            val display = if (android.os.Build.VERSION.SDK_INT >= 30) context.display else
+                (context.getSystemService(android.content.Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
+            val now = display?.mode
+            val hz = display?.supportedModes
+                ?.filter { now == null || (it.physicalWidth == now.physicalWidth && it.physicalHeight == now.physicalHeight) }
+                ?.maxOfOrNull { it.refreshRate } ?: display?.refreshRate ?: 0f
+            model.dispatch(Ev.viewport(w.toDouble(), h.toDouble(), density.toDouble(), 25.4 / dpi, hz.toDouble()))
         }
         if (s.phase != "pick") s.geometry?.let { CodeView(model.core, it, s.frameRev, s.playing, s.fps) }
     }
@@ -534,7 +543,7 @@ private fun SettingsPanel(model: AppModel, s: SendVM, side: Boolean, modifier: M
                     ) { model.dispatch(Ev.ecc(it)) }
                 }
                 Field(model.t("speed")) {
-                    LumenSlider(fps, 4f..60f, 1f, Modifier.weight(1f)) {
+                    LumenSlider(fps, 4f..s.fpsMax.coerceAtLeast(5).toFloat(), 1f, Modifier.weight(1f)) {
                         fps = it
                         model.dispatch(Ev.fps(it.roundToInt()))
                     }

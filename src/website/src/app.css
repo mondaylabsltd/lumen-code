@@ -537,7 +537,8 @@ a.build:hover {
 .settings .fields {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr));
-	gap: 8px 24px;
+	/* wide between the columns: a control ends one group, the label after it starts the next */
+	gap: 8px 40px;
 }
 .field {
 	display: flex;
@@ -545,9 +546,12 @@ a.build:hover {
 	gap: 10px;
 	min-width: 0;
 }
+/* The label ends at its control (right-aligned in its column), not at the far side of it:
+   it reads as the name of what follows, and stays clear of the control before it. */
 .field > span {
 	flex: none;
 	width: 112px;
+	text-align: right;
 	font-size: 13px;
 	color: var(--muted);
 }

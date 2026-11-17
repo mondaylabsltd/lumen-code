@@ -37,8 +37,9 @@ scripts/                     build-core.sh, run.sh, sim.sh
 ## What the shell does
 
 - **Sending.** The code is a `CALayer` holding a one-pixel-per-cell image, scaled with nearest-neighbour filtering under a static mask, so a frame change touches only a few thousand pixels. A display link running at up to 120 Hz (`CADisableMinimumFrameDurationOnPhone`) shows each frame at its scheduled time, and the next frame is built on a background queue. While a code plays, the screen stays on at full brightness.
-- **Receiving.** `AVCaptureVideoDataOutput` delivers 4:2:0 full-range Y'CbCr at 1080p, and the core reads both planes in place. Exposure bias is half a stop negative because a screen is a light source; stabilisation is off and continuous autofocus is restricted to near range. When the core asks, the camera switches to 60/120/240 fps (unbinned formats only) or 4K. `AVCaptureDevice.RotationCoordinator` keeps the preview upright.
-- **Heat.** `ProcessInfo.thermalState` is passed to the core, which scans less and drops the fast camera modes as the phone warms up.
+- **Receiving.** `AVCaptureVideoDataOutput` delivers 4:2:0 full-range Y'CbCr at 1080p, and the core reads both planes in place. Exposure bias is half a stop negative because a screen is a light source; stabilisation is off and continuous autofocus is restricted to near range. When the core asks, the camera switches to a faster format (unbinned only; up to the fastest 1080p rate the camera has) or 4K, and limits the exposure time (`activeMaxExposureDuration`). `AVCaptureDevice.RotationCoordinator` keeps the preview upright.
+- **Heat.** `ProcessInfo.thermalState` is passed to the core, which keeps the full rate on a warm phone and cuts scanning and the fast camera modes only at the critical level.
+- **Held on its side.** While scanning, the status and the panel turn with the phone (gravity from Core Motion, so it works with the rotation lock on), the panel becomes one line and a bar, and the scan frame is the screen's four corners.
 - **Feedback.** Haptics mark lock-on, each quarter of progress, completion and errors. The received file opens in a reader, Quick Look, the share sheet or Files.
 
 ## Device tests without touching the phone

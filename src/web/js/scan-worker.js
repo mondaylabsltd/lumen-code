@@ -57,11 +57,15 @@ self.onmessage = async (e) => {
     }
     const packets = [];
     const okIdx = [];
+    const prints = []; // a short name for each packet's bytes (FNV-1a), to tell a repeat from news
     if (res.ok)
       for (const c of res.codewords)
         if (c.ok) {
           packets.push(c.bytes);
           okIdx.push(c.index);
+          let h = 0x811c9dc5;
+          for (let i = 0; i < c.bytes.length; i++) h = Math.imul(h ^ c.bytes[i], 0x01000193);
+          prints.push(h >>> 0);
         }
     self.postMessage(
       {
@@ -79,6 +83,7 @@ self.onmessage = async (e) => {
         frameKey: res.frameKey || null,
         skipped: !!res.skipped,
         okIdx,
+        prints,
         stats: res.ok ? res.stats : null,
         packets,
       },

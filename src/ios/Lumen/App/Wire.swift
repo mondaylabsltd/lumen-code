@@ -25,6 +25,7 @@ struct OpWire: Decodable {
     var level: Float?
     var fps: UInt32?
     var uhd: Bool?
+    var maxUs: UInt32?
     var name: String?
     var mime: String?
     var pretty: Bool?
@@ -84,6 +85,8 @@ struct SendVM: Decodable, Equatable {
     var stats: [StatVM]
     var playing: Bool
     var fps: UInt32
+    /// The fastest this screen can play: the top of the speed control.
+    var fpsMax: UInt32
     var settingsOpen: Bool
     var density: String
     var mode: UInt8
@@ -162,8 +165,8 @@ enum Ev {
     static func start(locale: String) -> [String: Any] { ["type": "start", "locale": locale, "platform": "ios"] }
     static func navigate(_ s: Screen) -> [String: Any] { ["type": "navigate", "screen": s.rawValue] }
     static let toggleLang: [String: Any] = ["type": "toggle_lang"]
-    static func viewport(width: Double, height: Double, scale: Double, mmPerPx: Double) -> [String: Any] {
-        ["type": "viewport", "widthPx": width, "heightPx": height, "scale": scale, "mmPerPx": mmPerPx]
+    static func viewport(width: Double, height: Double, scale: Double, mmPerPx: Double, refreshHz: Double) -> [String: Any] {
+        ["type": "viewport", "widthPx": width, "heightPx": height, "scale": scale, "mmPerPx": mmPerPx, "refreshHz": refreshHz]
     }
     static func appActive(_ on: Bool) -> [String: Any] { ["type": "app_active", "active": on] }
     static func sourceTab(_ t: String) -> [String: Any] { ["type": "source_tab", "tab": t] }

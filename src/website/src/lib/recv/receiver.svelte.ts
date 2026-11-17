@@ -49,7 +49,11 @@ interface FrameEntry {
 	ok: Set<number>;
 	seq: number;
 	total: number;
+	scans: number;
 }
+
+// Captures of a frame that are read whole before its decoded codewords are skipped.
+const WHOLE_SCANS = 2;
 interface Crop {
 	x: number;
 	y: number;
@@ -152,8 +156,7 @@ export class ReceiveController {
 	private zoomPending = false;
 	private lastDispatch = 0;
 	private senderFpsEst = 0;
-	private nextScanAt = 0;
-	private lastDecisionAt = 0; // capture time of the newest result used for scheduling
+	private lastNews: (number | undefined)[] = []; // per codeword place: the last packet that was news
 	private captureAt = new Map<number, number>();
 	private crop: Crop | null = null;
 	private cropAt = 0;
@@ -402,30 +405,19 @@ export class ReceiveController {
 		return [this.video.videoWidth, this.video.videoHeight];
 	}
 
-	// Frame-locked scanning. Each sender frame needs one good capture; more scans of the same
-	// frame only cost battery. After a frame is fully decoded, wait ~3/4 of a sender frame
-	// period; after a repeat, ~1/3; after a partial decode, rescan at once.
-	private senderPeriod() {
-		return 1000 / (this.senderFpsEst > 0 ? this.senderFpsEst : 12);
-	}
+	// While a code is in view every camera frame is scanned (as the apps do, src/app/core/src/
+	// engine/recv.rs). A capture of a frame that is already complete costs a header read; one
+	// of a frame seen twice before, only the codewords still missing. The first two captures
+	// of a frame are read whole: a screen changes frames from top to bottom over several
+	// milliseconds, so a capture can carry a new header over cells that still show the frame
+	// before. What a codeword's place decodes to is therefore compared with what that place
+	// gave last (lastNews): the same packet again is the old frame, not booked to the new one.
 	private scanDue(now: number) {
 		if (this.finished) return now - this.lastDispatch >= 1000 / 3;
 		// searching: 5 scans/s, and 2/s once nothing has been in view for 10 s (phone put down)
 		if (now - this.lastFoundAt > 10000) return now - this.lastDispatch >= 1000 / 2;
 		if (now - this.lastFoundAt > 2000) return now - this.lastDispatch >= 1000 / 5;
-		if (now - this.lastDispatch < Math.min(1000 / 30, this.senderPeriod() / 3)) return false;
-		return now >= this.nextScanAt;
-	}
-	private schedule(d: any, capturedAt: number) {
-		if (capturedAt < this.lastDecisionAt) return; // an older capture finished late
-		this.lastDecisionAt = capturedAt;
-		const P = this.senderPeriod();
-		if (!d.ok) this.nextScanAt = 0;
-		else if (d.skipped) this.nextScanAt = capturedAt + 0.33 * P;
-		else {
-			const e = d.frameKey && this.frameDone.get(d.frameKey);
-			this.nextScanAt = e && e.total && e.ok.size >= e.total ? capturedAt + 0.75 * P : 0;
-		}
+		return true;
 	}
 
 	private pump = () => {
@@ -450,7 +442,11 @@ export class ReceiveController {
 		const out: Record<string, number[]> = {};
 		for (const [key, e] of this.frameDone) {
 			if (now - e.first > 4000) this.frameDone.delete(key);
-			else if (now - e.first <= FRAME_KEY_MS) out[key] = [...e.ok];
+			else if (
+				now - e.first <= FRAME_KEY_MS &&
+				(e.scans >= WHOLE_SCANS || (e.total && e.ok.size >= e.total))
+			)
+				out[key] = [...e.ok];
 		}
 		return out;
 	}
@@ -528,7 +524,6 @@ export class ReceiveController {
 			console.warn(d.error);
 			if (d.wasmError) this.wasmFailed(d.error);
 			else if (this.useBitmap && ++this.workerErrors >= 2) this.useBitmap = false; // no OffscreenCanvas 2D in workers
-			this.nextScanAt = 0;
 			return;
 		}
 		const now = performance.now();
@@ -556,24 +551,30 @@ export class ReceiveController {
 					first: now,
 					ok: new Set(),
 					seq: d.header.seq,
-					total: d.stats ? d.stats.cwCount : 0
+					total: d.stats ? d.stats.cwCount : 0,
+					scans: 0
 				};
 				this.frameDone.set(d.frameKey, e);
 				s.frames++;
 				s.covTot += e.total;
 			}
 			e.t = now;
-			for (const i of d.okIdx || []) {
-				if (!e.ok.has(i)) s.covOk++;
-				e.ok.add(i);
-			}
+			e.scans++;
+			const entry = e;
+			(d.okIdx || []).forEach((i: number, k: number) => {
+				// the packet this place gave last: the same frame again, or the one before under a new header
+				const print: number | undefined = d.prints ? d.prints[k] : undefined;
+				if (print !== undefined && this.lastNews[i] === print && !entry.ok.has(i)) return;
+				this.lastNews[i] = print;
+				if (!entry.ok.has(i)) s.covOk++;
+				entry.ok.add(i);
+			});
 			s.header = d.header;
 		}
 		if (d.ok && d.stats && !d.skipped) {
 			s.cellSum += d.stats.cellPx;
 			s.cellN++;
 		}
-		this.schedule(d, capturedAt);
 		this.updateCrop(d, capturedAt);
 		const rec = { t: now, ok: d.ok, cwOk: 0, cwTotal: 0, cell: 0, skipped: !!d.skipped };
 		if (d.ok) {

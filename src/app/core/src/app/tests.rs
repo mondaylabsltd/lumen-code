@@ -76,7 +76,7 @@ impl Harness {
 }
 
 fn phone() -> Event {
-    Event::Viewport { width_px: 1080.0, height_px: 2200.0, scale: 2.75, mm_per_px: 0.0577 }
+    Event::Viewport { width_px: 1080.0, height_px: 2200.0, scale: 2.75, mm_per_px: 0.0577, refresh_hz: 0.0 }
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn sending_a_file_shows_a_code_and_keeps_the_screen_on() {
 
     // turning the phone keeps the stream, with a landscape grid
     let rev = h.last.send.frame_rev;
-    h.send(Event::Viewport { width_px: 2200.0, height_px: 1080.0, scale: 2.75, mm_per_px: 0.0577 });
+    h.send(Event::Viewport { width_px: 2200.0, height_px: 1080.0, scale: 2.75, mm_per_px: 0.0577, refresh_hz: 0.0 });
     h.wait_for("regrid", |v| v.send.frame_rev > rev);
     let g2 = h.last.send.geometry.unwrap();
     assert!(g2.x > g2.y);
@@ -142,7 +142,7 @@ fn text_round_trip_through_rendered_frames() {
     // sender
     let mut tx = Harness::new(Platform::Desktop);
     tx.send(Event::Navigate { screen: Screen::Send });
-    tx.send(Event::Viewport { width_px: 1400.0, height_px: 900.0, scale: 1.0, mm_per_px: 0.25 });
+    tx.send(Event::Viewport { width_px: 1400.0, height_px: 900.0, scale: 1.0, mm_per_px: 0.25, refresh_hz: 0.0 });
     let text = r#"{"hello":"世界","n":[1,2,3],"url":"https://lumen.example/x"}"#;
     tx.send(Event::SourceTab { tab: SourceTab::Text });
     tx.send(Event::TextChanged { text: text.into() });
@@ -324,6 +324,85 @@ fn camera_mode_follows_the_sender_and_the_heat() {
     let stats = LiveStats { sender_fps: 8.0, last_found_at: at, cell: 6.0, cell_n: 5, heat_limited: true, ..Default::default() };
     h.send(Event::Scanned(Box::new(ScanReport { at, ok: true, stats, ..Default::default() })));
     assert_eq!(h.last.recv.tip, crate::i18n::t(Lang::Zh, "tipHotScan"));
+}
+
+/// A desktop starts at 60 fps on the densest grid; a phone keeps the cautious settings.
+/// Stored settings that are exactly the old defaults follow; chosen ones stay.
+#[test]
+fn defaults_follow_the_platform_and_migrate_once() {
+    let load = |platform: Platform, json: Option<&str>| {
+        let mut m = Model::default();
+        let _ = super::update(Event::Start { locale: "en".into(), platform }, &mut m);
+        let _ = super::update(Event::PrefsLoaded(ShellOutput::Prefs { json: json.map(str::to_string) }), &mut m);
+        (m.prefs.fps, m.prefs.density, m.prefs.mode, m.prefs.ecc, m.prefs.defaults)
+    };
+    assert_eq!(load(Platform::Desktop, None), (60, Density::Max, 1, 1, DEFAULTS));
+    assert_eq!(load(Platform::Ios, None), (12, Density::Auto, 1, 1, DEFAULTS));
+    assert_eq!(load(Platform::Android, None), (12, Density::Auto, 1, 1, DEFAULTS));
+    // stored before the change, never touched: today's defaults
+    let old = r#"{"lang":"en","density":"auto","mode":1,"ecc":1,"fps":12,"source":"file","flashOk":true}"#;
+    assert_eq!(load(Platform::Desktop, Some(old)), (60, Density::Max, 1, 1, DEFAULTS));
+    assert_eq!(load(Platform::Ios, Some(old)), (12, Density::Auto, 1, 1, DEFAULTS));
+    // stored before the change, chosen: kept
+    let chosen = r#"{"lang":"en","density":"low","mode":1,"ecc":1,"fps":31,"source":"file","flashOk":true}"#;
+    assert_eq!(load(Platform::Desktop, Some(chosen)), (31, Density::Low, 1, 1, DEFAULTS));
+    // stored after the change: 12 fps on the plain grid is a choice
+    let new = r#"{"density":"auto","mode":1,"ecc":1,"fps":12,"defaults":2}"#;
+    assert_eq!(load(Platform::Desktop, Some(new)), (12, Density::Auto, 1, 1, DEFAULTS));
+}
+
+/// Nothing fixes the frame rate but the screen and the protocol: a 120 Hz screen plays up to
+/// 120, a 60 Hz one holds a stored 120 at 60 without forgetting it, and a camera that offers
+/// 480 captures a second is used for a sender fast enough to need them.
+#[test]
+fn frame_rates_follow_the_hardware() {
+    assert_eq!(max_fps(0.0), DEFAULT_MAX_FPS);
+    assert_eq!(max_fps(59.94), 60);
+    assert_eq!(max_fps(120.0), 120);
+    assert_eq!(max_fps(165.0), 165);
+    assert_eq!(max_fps(500.0), FPS_CEILING, "the 8-bit frame number allows no more");
+    let mut m = Model::default();
+    let _ = super::update(Event::Start { locale: "en".into(), platform: Platform::Desktop }, &mut m);
+    let screen = |m: &mut Model, hz: f64| {
+        let _ = super::update(Event::Viewport { width_px: 3000.0, height_px: 1900.0, scale: 2.0, mm_per_px: 0.125, refresh_hz: hz }, m);
+    };
+    screen(&mut m, 120.0);
+    let _ = super::update(Event::SetFps { value: 200 }, &mut m);
+    assert_eq!((m.prefs.fps, view::view(&m).send.fps, view::view(&m).send.fps_max), (120, 120, 120));
+    screen(&mut m, 60.0);
+    assert_eq!((m.prefs.fps, view::view(&m).send.fps, view::view(&m).send.fps_max), (120, 60, 60), "the choice is kept for a faster screen");
+    assert_eq!(capture_rates(30), vec![30]);
+    assert_eq!(capture_rates(60), vec![30, 60]);
+    assert_eq!(capture_rates(90), vec![30, 60, 90]);
+    assert_eq!(capture_rates(240), vec![30, 60, 120, 240]);
+    assert_eq!(capture_rates(480), vec![30, 60, 120, 240, 480]);
+    // a 120 fps sender in front of a camera that reaches 480
+    let mut m = Model { screen: Screen::Receive, ..Model::default() };
+    m.recv.phase = RecvPhase::Scanning;
+    m.recv.camera.on = true;
+    m.recv.camera.fps = 30;
+    m.recv.camera.max_fps = 480;
+    let stats = crate::engine::recv::LiveStats { sender_fps: 130.0, last_found_at: 5000.0, cell: 6.0, cell_n: 5, ..Default::default() };
+    let _ = super::update(Event::Scanned(Box::new(crate::engine::recv::ScanReport { at: 5000.0, ok: true, stats, ..Default::default() })), &mut m);
+    assert_eq!(m.recv.camera.fps, 480);
+}
+
+/// A warm phone keeps the fast capture mode (fair, serious): giving it up is the loss of rate
+/// the person came to avoid. Only the critical level, where the system is about to stop the
+/// camera itself, takes it back to 60.
+#[test]
+fn a_warm_phone_keeps_its_rate() {
+    let mut m = Model { screen: Screen::Receive, platform: Platform::Ios, ..Model::default() };
+    m.recv.phase = RecvPhase::Scanning;
+    m.recv.camera.on = true;
+    m.recv.camera.fps = 120;
+    m.recv.camera.max_fps = 240;
+    for level in [1, 2] {
+        let _ = super::update(Event::Thermal { level }, &mut m);
+        assert_eq!(m.recv.camera.fps, 120, "level {level}");
+    }
+    let _ = super::update(Event::Thermal { level: 3 }, &mut m);
+    assert_eq!(m.recv.camera.fps, 60);
 }
 
 /// While data keeps arriving the receiver says so: a green outline and no warning, even when

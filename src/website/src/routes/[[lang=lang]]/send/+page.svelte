@@ -316,11 +316,11 @@
 								type="range"
 								id="fps"
 								min="4"
-								max="60"
+								max={tx.fpsMax}
 								step="1"
-								value={tx.prefs.fps}
+								value={tx.fps}
 								oninput={(e) => tx?.setFps(Number((e.target as HTMLInputElement).value))}
-							/><b class="num" id="fpsVal">{tx.prefs.fps}</b>
+							/><b class="num" id="fpsVal">{tx.fps}</b>
 						</label>
 						<div class="field">
 							<span>{t('engine')}</span>
@@ -474,7 +474,7 @@
 		>
 			<div class="panel">
 				<h2 id="flashTitle">{t('flashTitle')}</h2>
-				<p id="flashText">{t('flashWarn')}</p>
+				<p id="flashText">{t('flashWarn').replace('{n}', String(tx?.fpsMax ?? 60))}</p>
 				<div class="row">
 					<button class="btn" onclick={close}>{t('closeCode')}</button>
 					<!-- svelte-ignore a11y_autofocus -->

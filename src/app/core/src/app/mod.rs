@@ -115,31 +115,114 @@ pub struct Prefs {
     /// The photosensitivity warning was acknowledged; until then a code waits, paused.
     #[serde(default)]
     pub flash_ok: bool,
+    /// Which defaults these choices started from (see [`Prefs::migrated`]).
+    #[serde(default)]
+    pub defaults: u32,
 }
+
+/// The current generation of defaults. 2: a desktop sender starts at 60 fps, densest grid.
+pub const DEFAULTS: u32 = 2;
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { lang: None, density: Density::Auto, mode: 1, ecc: 1, fps: 12, source: SourceTab::File, reader: ReaderPrefs::default(), flash_ok: false }
+        Prefs { lang: None, density: Density::Auto, mode: 1, ecc: 1, fps: 12, source: SourceTab::File, reader: ReaderPrefs::default(), flash_ok: false, defaults: DEFAULTS }
     }
 }
 
 impl Prefs {
+    /// What a first launch starts with.
+    ///
+    /// A desktop screen is large and refreshes 60 times a second or more: 60 frames a second
+    /// on the densest grid, four colours. Measured from a 27-inch 60 Hz monitor to an
+    /// iPhone 15 Pro (120 captures a second): 1.2 MB/s, against 0.84 MB/s one density step
+    /// lower and 0.5 MB/s at the density a phone screen uses. The code must fill most of the
+    /// camera's frame (3.4 camera pixels per cell or more); the receiver says so when it does
+    /// not. A phone's screen is small and its refresh rate varies: the cautious settings stay.
+    pub fn for_platform(platform: Platform) -> Prefs {
+        match platform {
+            Platform::Desktop => Prefs { density: Density::Max, fps: 60, ..Prefs::default() },
+            Platform::Ios | Platform::Android => Prefs::default(),
+        }
+    }
+
+    /// Stored choices made under older defaults: send settings that are exactly the old
+    /// defaults were most likely never chosen, and follow the defaults of today.
+    fn migrated(mut self, platform: Platform) -> Prefs {
+        if self.defaults < DEFAULTS {
+            let untouched = self.density == Density::Auto && self.mode == 1 && self.ecc == 1 && self.fps == 12;
+            if untouched {
+                let now = Prefs::for_platform(platform);
+                (self.density, self.mode, self.ecc, self.fps) = (now.density, now.mode, now.ecc, now.fps);
+            }
+            self.defaults = DEFAULTS;
+        }
+        self
+    }
+
     /// Stored values are checked, never trusted.
     fn sanitized(mut self) -> Prefs {
         if !(1..=2).contains(&self.mode) {
             self.mode = 1;
         }
         self.ecc = self.ecc.min(2);
-        self.fps = self.fps.clamp(MIN_FPS, MAX_FPS);
+        self.fps = self.fps.clamp(MIN_FPS, FPS_CEILING);
         self.reader.font = self.reader.font.clamp(-4, 8);
         self
     }
 }
 
+/// [`Prefs`] as stored: without `defaults`, they date from before the field existed.
+struct StoredPrefs(Prefs);
+
+impl<'de> Deserialize<'de> for StoredPrefs {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        let dated = v.get("defaults").is_some();
+        let mut p: Prefs = serde_json::from_value(v).map_err(serde::de::Error::custom)?;
+        if !dated {
+            p.defaults = 0;
+        }
+        Ok(StoredPrefs(p))
+    }
+}
+
 pub const MIN_FPS: u32 = 4;
-/// 60 needs a 120 Hz screen on the sender for even frame times and a 120 fps camera on the
-/// receiver; the core switches the receiver's camera up as the sender's rate rises.
-pub const MAX_FPS: u32 = 60;
+/// The frame rate a sender offers when its screen has not said how fast it refreshes.
+pub const DEFAULT_MAX_FPS: u32 = 60;
+/// The protocol's own limit, whatever the screen: the frame number has 8 bits and names a
+/// frame for one second (PROTOCOL §11.5), so a second must hold fewer than 256 frames.
+pub const FPS_CEILING: u32 = 240;
+
+/// The fastest a sender can play: one frame per refresh of its screen. Nothing else is fixed —
+/// a faster screen raises it, and the receiver's camera follows as far as it can.
+pub fn max_fps(refresh_hz: f64) -> u32 {
+    if refresh_hz.is_finite() && refresh_hz >= 1.0 {
+        (refresh_hz.round() as u32).clamp(MIN_FPS, FPS_CEILING)
+    } else {
+        DEFAULT_MAX_FPS
+    }
+}
+
+/// The capture rates a receiver steps through, up to what its camera offers: 30 and its
+/// doublings, and the camera's own top rate when that is none of them (90, 144).
+fn capture_rates(camera_max: u32) -> Vec<u32> {
+    let top = camera_max.max(30);
+    let mut rates: Vec<u32> = std::iter::successors(Some(30u32), |r| r.checked_mul(2)).take_while(|&r| r <= top).collect();
+    if rates.last() != Some(&top) {
+        rates.push(top);
+    }
+    rates
+}
+
+/// The sender rate from which a capture rate is worth its power: a little over a quarter of
+/// it, so that each sender frame gets about two captures and up to four.
+fn capture_from(rate: u32) -> f32 {
+    if rate <= 30 {
+        0.0
+    } else {
+        rate as f32 * 16.0 / 60.0
+    }
+}
 /// The dock hides itself after this long without a touch while the code plays.
 pub const DOCK_IDLE_MS: u32 = 2600;
 /// Dashboard refresh while scanning (numbers that age: status, speed).
@@ -180,8 +263,16 @@ pub enum Event {
     Start { locale: String, platform: Platform },
     Navigate { screen: Screen },
     ToggleLang,
-    /// The space the sender's code may use (device pixels, safe area removed).
-    Viewport { width_px: f64, height_px: f64, scale: f64, mm_per_px: f64 },
+    /// The space the sender's code may use (device pixels, safe area removed), and how many
+    /// times a second the screen refreshes (0: unknown).
+    Viewport {
+        width_px: f64,
+        height_px: f64,
+        scale: f64,
+        mm_per_px: f64,
+        #[serde(default)]
+        refresh_hz: f64,
+    },
     /// The app went to the background (or came back).
     AppActive { active: bool },
     /// The device's thermal state: 0 nominal, 1 fair, 2 serious, 3 critical.
@@ -358,6 +449,8 @@ pub struct Model {
     pub(crate) screen: Screen,
     pub(crate) prefs: Prefs,
     pub(crate) viewport: Viewport,
+    /// Refreshes per second of the sender's screen (0: not known).
+    pub(crate) refresh_hz: f64,
     pub(crate) now: f64,
     pub(crate) send: SendState,
     pub(crate) recv: RecvState,
@@ -447,13 +540,15 @@ fn update(event: Event, model: &mut Model) -> Cmd {
             }
             model.started = true;
             model.platform = platform;
+            model.prefs = Prefs::for_platform(platform);
             model.lang = Lang::from_tag(&locale);
             Command::request_from_shell(ShellOp::LoadPrefs).then_send(Event::PrefsLoaded)
         }
         Event::PrefsLoaded(out) => {
             if let ShellOutput::Prefs { json: Some(json) } = out {
-                if let Ok(p) = serde_json::from_str::<Prefs>(&json) {
-                    model.prefs = p.sanitized();
+                // (a field missing from stored JSON reads as 0: older than every default)
+                if let Ok(p) = serde_json::from_str::<StoredPrefs>(&json) {
+                    model.prefs = p.0.migrated(model.platform).sanitized();
                     if let Some(l) = model.prefs.lang {
                         model.lang = l;
                     }
@@ -467,7 +562,11 @@ fn update(event: Event, model: &mut Model) -> Cmd {
             model.prefs.lang = Some(model.lang);
             save_prefs(model)
         }
-        Event::Viewport { width_px, height_px, scale, mm_per_px } => {
+        Event::Viewport { width_px, height_px, scale, mm_per_px, refresh_hz } => {
+            // (the refresh rate is no part of the grid: a change of it alone redraws the bar)
+            if refresh_hz.is_finite() && refresh_hz >= 0.0 {
+                model.refresh_hz = refresh_hz;
+            }
             let vp = Viewport { width_px, height_px, scale, mm_per_px };
             if vp == model.viewport || width_px < 50.0 || height_px < 50.0 {
                 return Command::done();
@@ -478,9 +577,10 @@ fn update(event: Event, model: &mut Model) -> Cmd {
         Event::Thermal { level } => {
             model.thermal = level.min(3);
             let heat = engine_notify(EngineOp::Heat { level: model.thermal });
-            // hot: the fast capture modes go first (they cost the most)
+            // Only at the critical level: the fast capture modes go (they cost the most), before
+            // the system stops the camera itself. A phone that is merely warm keeps its rate.
             let cam = &mut model.recv.camera;
-            if model.thermal >= 2 && cam.on && cam.fps > 60 {
+            if model.thermal >= 3 && cam.on && cam.fps > 60 {
                 cam.fps = 60;
                 cam.mode_at = model.now;
                 return Command::all([heat, notify(ShellOp::CameraMode { fps: 60, uhd: cam.uhd })]);
@@ -555,7 +655,7 @@ fn update(event: Event, model: &mut Model) -> Cmd {
             Command::all([save_prefs(model), haptic(HapticKind::Selection), poke_dock(model), reconfigure(model)])
         }
         Event::SetFps { value } => {
-            let v = value.clamp(MIN_FPS, MAX_FPS);
+            let v = value.clamp(MIN_FPS, max_fps(model.refresh_hz));
             if v == model.prefs.fps {
                 return Command::done();
             }
@@ -961,30 +1061,30 @@ fn scanned(model: &mut Model, report: ScanReport) -> Cmd {
     let r = &mut model.recv;
     let mut cmd = Command::done();
     // The capture mode follows the code. Frame rate: each sender frame needs about two
-    // captures, so the camera runs at the lowest of 30/60/120/240 fps that gives that (a fast
+    // captures, so the camera runs at the lowest of its rates that gives that (a fast
     // mode also reads the sensor out faster: fewer torn frames). 4K for small cells (4:2:0
     // colour at 1080p gives a 5-pixel cell 2.5 colour pixels and neighbours bleed; at 5 px it
     // gains nothing measurable and only costs power, so only genuinely tiny cells qualify).
     // Wide hysteresis (the estimate of a 12 fps sender jitters around 12–14), and two seconds
     // for a new mode to settle.
     let sender = report.stats.sender_fps;
-    let hot = model.thermal >= 2;
+    let hot = model.thermal >= 3;
     let cam = &mut r.camera;
     if cam.on && report.at - cam.mode_at > 2000.0 {
         let mut fps = cam.fps;
-        // a hot phone gives up the fast modes before iOS/Android throttle it mid-transfer
+        // at the critical level the fast modes go, before iOS/Android stop the camera
         let max_fps = if hot { cam.max_fps.min(60) } else { cam.max_fps };
         if sender > 0.0 {
-            const BANDS: [(u32, f32, f32); 4] = [(30, 0.0, 13.0), (60, 16.0, 27.0), (120, 32.0, 54.0), (240, 64.0, f32::MAX)];
-            let cur = BANDS.iter().position(|b| b.0 == fps).unwrap_or(0);
+            let rates = capture_rates(max_fps);
+            let cur = rates.iter().position(|&r| r == fps).unwrap_or(0);
             let mut band = cur;
-            while band + 1 < BANDS.len() && sender >= BANDS[band + 1].1 && BANDS[band + 1].0 <= max_fps {
+            while band + 1 < rates.len() && sender >= capture_from(rates[band + 1]) {
                 band += 1;
             }
-            while band > 0 && (sender < BANDS[band].1 - 3.0 || BANDS[band].0 > max_fps) {
+            while band > 0 && sender < capture_from(rates[band]) - 3.0 {
                 band -= 1;
             }
-            fps = BANDS[band].0;
+            fps = rates[band];
         }
         let mut uhd = cam.uhd;
         let cell = report.stats.cell as f64;
@@ -1006,10 +1106,14 @@ fn scanned(model: &mut Model, report: ScanReport) -> Cmd {
             cmd = notify(ShellOp::CameraMode { fps, uhd });
         }
     }
-    // exposure: as long as a sixth of the sender's frame allows (less noise), in steps
+    // Exposure: at most a sixteenth of the sender's frame, in steps. While the shutter is open
+    // across a frame change the capture holds a blend of two frames, and a screen takes a few
+    // milliseconds over each change as it is; a longer exposure only widens that band. The
+    // gain that a short exposure needs costs less (measured at 60 frames a second: 1/1000 s
+    // decodes a seventh more of each capture than 1/500 s, at twice the gain).
     if cam.on && sender > 0.0 && report.stats.span_secs > 1.0 {
-        let fit = 1_000_000.0 / sender as f64 / 6.0;
-        let max_us = [8000u32, 4000, 2000].into_iter().find(|&b| b as f64 <= fit).unwrap_or(1000);
+        let fit = 1_000_000.0 / sender as f64 / 16.0;
+        let max_us = [8000u32, 4000, 2000, 1000].into_iter().find(|&b| b as f64 <= fit).unwrap_or(500);
         if max_us != cam.exposure_us {
             cam.exposure_us = max_us;
             cmd = Command::all([cmd, notify(ShellOp::CameraExposure { max_us })]);

@@ -102,8 +102,11 @@ struct SendScreen: View {
         let pad = UIDevice.current.userInterfaceIdiom == .pad
         // physical size of a point: ~0.16 mm on iPhones, ~0.19 mm on iPads
         let mmPerPt = pad ? 0.19 : 0.16
+        // the screen's refresh rate is the fastest the code can play: 60, 120 on ProMotion,
+        // whatever a later screen offers
         model.dispatch(Ev.viewport(width: Double(size.width * scale), height: Double(size.height * scale),
-                                   scale: Double(scale), mmPerPx: mmPerPt / Double(scale)))
+                                   scale: Double(scale), mmPerPx: mmPerPt / Double(scale),
+                                   refreshHz: Double(UIScreen.main.maximumFramesPerSecond)))
     }
 }
 
@@ -427,7 +430,7 @@ private struct SettingsPanel: View {
                     }
                     field("speed") {
                         HStack(spacing: 10) {
-                            Slider(value: $fps, in: 4...60, step: 1) { editing = $0 }
+                            Slider(value: $fps, in: 4...Double(max(5, send.fpsMax)), step: 1) { editing = $0 }
                                 .tint(Theme.cyan)
                                 .frame(minHeight: 44)
                                 .accessibilityLabel(model.t("speed"))

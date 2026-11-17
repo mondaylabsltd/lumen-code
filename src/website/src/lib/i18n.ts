@@ -33,7 +33,7 @@ export const DICT = {
 		choose: '选择文件',
 		sendText: '发送文本',
 		dropHint: '调高屏幕亮度，接收端正对屏幕。',
-		flashWarn: '码每秒最多闪烁 60 次，对闪光敏感的人请勿注视。',
+		flashWarn: '码每秒最多闪烁 {n} 次，对闪光敏感的人请勿注视。',
 		flashTitle: '光敏提示',
 		flashPlay: '知道了，开始播放',
 		closeCode: '关闭',
@@ -152,7 +152,7 @@ export const DICT = {
 		sendText: 'Send text',
 		dropHint: 'Turn the brightness up; keep the receiver square to the screen.',
 		flashWarn:
-			'The code flashes up to 60 times a second. If flashing light affects you, don’t look at it.',
+			'The code flashes up to {n} times a second. If flashing light affects you, don’t look at it.',
 		flashTitle: 'Photosensitivity',
 		flashPlay: 'I understand, play',
 		closeCode: 'Close',
