@@ -10,6 +10,8 @@ The website receives several times faster and now works in Chrome on Android; th
 
 What a camera needs differs: an iPhone 15 Pro or a Galaxy S22 reads cells of 3.5 camera pixels, a Redmi K40 and a MacBook's built-in camera need 6 to 7. Browsers open phone cameras at 1080p and 30 frames a second, so the website receives at about half the rate of the apps or less. Conditions and all figures are in the [performance guide](https://github.com/mondaylabsltd/lumen-code/blob/main/docs/guide/04-performance.md).
 
+1.2.1 follows 1.2.0 the same evening with one addition for the phone apps: the send screen takes a picture or a video from the photo library, where it opened the file picker only. Tried on a Galaxy S22; on iPhone it is built and not yet confirmed. The desktop and the website are as in 1.2.0.
+
 Not measured for this version: the Galaxy S22 with the Android app, and Windows and Linux with a camera.
 
 ## Desktop downloads
