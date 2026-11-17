@@ -2,8 +2,8 @@
 // Static parts (finders, corner, markers) are drawn once with rounded shapes;
 // data/header cells are drawn per frame as rounded "LED" squares on ink.
 
-import { MODES, INK, PAPER, K_DATA, K_HEADER } from './layout.js?v=bd0b2be23b';
-import { IDX_INK, IDX_PAPER } from './frame.js?v=bd0b2be23b';
+import { MODES, INK, PAPER, K_DATA, K_HEADER } from './layout.js?v=bb58023b2a';
+import { IDX_INK, IDX_PAPER } from './frame.js?v=bb58023b2a';
 
 function pack(rgb) {
   // little-endian RGBA

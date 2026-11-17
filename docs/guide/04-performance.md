@@ -118,7 +118,7 @@ On an Apple M2, a full scan of a 1080p photo takes 15–16 ms in JS and 7 ms in 
 In order of impact:
 
 1. **Pixels per cell in the camera image.** Measured with the native app (60 FPS, 4 colours): 99% of codewords at 4 pixels and more, 90–94% at 3.5, 80–86% at 3.2–3.4, and below half soon under 3.0. In a 1080p image, density Max gives at most 4.0 pixels per cell (when the code exactly fills the frame), so it needs the code to fill most of the picture. It depends on the cell size on the screen, the capture distance and the camera resolution. A higher "Density" puts more data in each frame, but the cells get smaller and the success rate drops.
-2. **Camera**: most phone web pages get only 30 FPS; the rolling shutter causes tearing; auto-exposure may overexpose in front of a bright screen; motion blur.
+2. **Camera**: the best sender rate is half the camera's fastest unbinned rate, so that every frame is captured twice. Measured from a MacBook's built-in 120 Hz screen to an iPhone 15 Pro (camera at 120 FPS): 766 KB/s with the sender at 60 FPS and only 80–400 KB/s at 120 FPS, where each frame is captured once and mostly inside the frame change. The 240 FPS mode of this phone is binned only: it smears the colour over neighbouring cells and no codeword decodes. Most phone web pages get only 30 FPS; the rolling shutter causes tearing; motion blur.
 3. **Display**: the top frame rate is the screen's refresh rate (the apps offer up to the rate they measure; no figure is fixed, and the protocol's own limit is 240 FPS because the frame number has 8 bits). On a 60 Hz screen the FPS should be a divisor of 60; otherwise the time each frame stays on screen varies. An LCD takes some milliseconds over each frame change, which the receiver covers with two captures per frame.
 4. **Receiver compute power**: if "captured" in the diagnostic line is below 80% and the engine time is high, compute power is the limit. Switch to WASM or lower the scan resolution.
 
@@ -151,9 +151,9 @@ The improvements are grouped by whether the protocol must change. Those that do 
 | Improvement | How it works | Expected gain | Difficulty |
 |---|---|---|---|
 | **Cross-frame soft combining** | The same frame is usually captured 2–3 times, and today each capture is decoded independently. Instead, add up the colour likelihoods of the same cell across captures before classifying. A codeword that neither capture decodes alone may decode when they are combined | A clear success-rate gain in marginal conditions (3.4–4.5 pixels per cell), roughly worth one more density step | Medium |
-| **Deblurring / crosstalk equalisation** | Blur mixes the colours of neighbours into each cell. Apply one equalisation pass with the measured blur kernel (subtract the weighted contribution of the neighbours from each cell) | Smaller cells become usable: density +20–30% | Medium |
-| **Taking the transition out** | At 60 FPS about 45% of each capture lies in the change between two frames. With the frame before known, its share can be subtracted and the whole frame decoded from one capture | One scan per frame, or faster screens for the same scanning work | High |
-| **WebGPU scanning** | Sampling and classification are highly parallel and suit the GPU | Scan time drops several times further; less heat | High |
+| **Deblurring / crosstalk equalisation** | Blur mixes the colours of neighbours into each cell. Apply one equalisation pass with the measured blur kernel (subtract the weighted contribution of the neighbours from each cell) | **Tried, not adopted**: on phone captures at 3.5 pixels per cell the fitted crosstalk is close to zero (centre 1.03, neighbours under 0.02); equalising decoded 2% more for 30% more time | — |
+| **Taking the transition out** | At 60 FPS about 45% of each capture lies in the change between two frames. With the frame before known, its share can be subtracted and the whole frame decoded from one capture | **Not now**, see below | High |
+| **GPU or SIMD scanning** | Sampling and classification are highly parallel | **Not now**, see below | High |
 
 ### B. Sender only (no protocol change)
 
@@ -170,4 +170,14 @@ The improvements are grouped by whether the protocol must change. Those that do 
 | LDPC / soft-decision codes instead of RS | Use the colour confidence of each cell directly; coding gain about 1.5–2 dB | High decoding complexity; hard to implement | Leave for v2 |
 | More colours (C16) | 4 bits per cell | Cameras cannot tell the colours apart well enough; the success rate would drop sharply | Not recommended |
 
-The best next step is cross-frame soft combining from group A: it needs no protocol change and raises the success rate directly. The header format stays as it is; it is frozen in 1.0.
+### Two things decided against for now (2026-11-17)
+
+**GPU or SIMD scanning.** Measurements show that computing does not limit the rate: one scan takes 4–10 ms on an iPhone 15 Pro, all 120 captures a second are scanned, and the rate is held by the camera's frame rate and the screen's frame change. Faster scanning would not bring one more packet. Sampling, classification and luma smoothing are about two thirds of a scan and parallel, so what they offer is less heat, not more rate. Do it when one of these happens, and SIMD first (it stays in the one Rust code base and every platform gains), the GPU after it (one implementation per platform, a delay for reading results back, and a GPU makes heat of its own):
+
+- the receive panel shows fewer scans than camera frames, or "captured" under 100% with a normal success rate;
+- a phone offers 240 FPS unbinned or 4K at 120 FPS, which is 2–8 times the scanning work of today;
+- a warm phone needs more than about 25 ms per scan (the limit of three scan threads at 120 captures a second). Measured warm at density Max: 17–19 ms.
+
+**Subtracting the frame change.** There are no figures for the gain, and four risks: the blend is not linear (an LCD rises and falls at different speeds, depending on the two colours, and the camera's output is not linear either), so where the model does not fit a screen the work is wasted; an area the frame before did not decode cannot be subtracted, so a missed frame carries on in the same area for some frames; one more RS attempt on near-random data is one more chance of a miscorrection that passes CRC-16, and when the file check stops it the whole transfer starts again; a scan would take an estimated 30–50% longer. If it is done: first check it offline on fresh raw captures at 60 and 120 FPS, and use it only as a second attempt on codewords that failed, so that the worst case is wasted work and never fewer packets.
+
+Of the other receiver-only improvements, cross-frame soft combining is still worth doing: no protocol change, and a direct gain in success rate. The header format stays as it is and is frozen in 1.0.

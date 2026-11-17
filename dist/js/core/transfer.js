@@ -1,6 +1,6 @@
 // Sender: file bytes -> stream of frames. Receiver: packets -> file.
 
-import { makeLayout, chooseCodeword, codewordsPerFrame, MODES, ECC_LEVELS, MIN_K, MIN_T } from './layout.js?v=bd0b2be23b';
+import { makeLayout, chooseCodeword, codewordsPerFrame, MODES, ECC_LEVELS, MIN_K, MIN_T } from './layout.js?v=bb58023b2a';
 import {
   encodeFrameCells,
   packetDataSize,
@@ -15,10 +15,10 @@ import {
   MAX_BLOCKS,
   MAX_BLOCK_SYMBOLS,
   FLAG_DEFLATE,
-} from './frame.js?v=bd0b2be23b';
-import { FountainEncoder, FountainDecoder } from './fountain.js?v=bd0b2be23b';
-import { inflate } from './inflate.js?v=bd0b2be23b';
-import { crc32, mix32 } from './util.js?v=bd0b2be23b';
+} from './frame.js?v=bb58023b2a';
+import { FountainEncoder, FountainDecoder } from './fountain.js?v=bb58023b2a';
+import { inflate } from './inflate.js?v=bb58023b2a';
+import { crc32, mix32 } from './util.js?v=bb58023b2a';
 
 export { FLAG_DEFLATE, MAX_BLOCK_SYMBOLS };
 
@@ -73,6 +73,10 @@ export async function preparePayload(fileBytes, name) {
 }
 
 export class Sender {
+  /**
+   * @param {{ payload: Uint8Array, meta: object }} prepared  from preparePayload()
+   * @param {{ mode?: number, ecc?: number, X?: number, Y?: number, tid?: number }} [options]
+   */
   constructor(prepared, { mode = 2, ecc = 1, X, Y, tid } = {}) {
     this.payload = prepared.payload;
     this.meta = prepared.meta;

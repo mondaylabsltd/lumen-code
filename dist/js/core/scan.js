@@ -7,8 +7,8 @@
 // 5. per-quad homographies; each cell sampled and normalised by local white/ink references
 // 6. colour classification (k-means seeded by the palette), confidences -> RS (with erasures)
 
-import { makeLayout, unpackHeader, MODES, INK, PAPER, HEADER_BITS, HEADER_MASKS, codewordsPerFrame, cellsPerCodeword } from './layout.js?v=bd0b2be23b';
-import { decodeCodewords } from './frame.js?v=bd0b2be23b';
+import { makeLayout, unpackHeader, MODES, INK, PAPER, HEADER_BITS, HEADER_MASKS, codewordsPerFrame, cellsPerCodeword } from './layout.js?v=bb58023b2a';
+import { decodeCodewords } from './frame.js?v=bb58023b2a';
 
 // ---------- linear algebra
 export function homography(src, dst) {

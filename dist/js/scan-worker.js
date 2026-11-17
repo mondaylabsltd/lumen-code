@@ -1,8 +1,8 @@
 // Decodes camera frames off the main thread, with the JS or the Rust/WASM engine.
 // The main thread sends only the region of interest, already downscaled on the GPU
 // (see grab() in recv-app.js); `region` maps the result back to camera pixels.
-import { Scanner } from './core/scan.js?v=bd0b2be23b';
-import { loadWasm, WasmScanner } from './core/wasm-engine.js?v=bd0b2be23b';
+import { Scanner } from './core/scan.js?v=bb58023b2a';
+import { loadWasm, WasmScanner } from './core/wasm-engine.js?v=bb58023b2a';
 
 const scanners = { js: new Scanner(), wasm: null };
 let canvas = null;
@@ -57,11 +57,15 @@ self.onmessage = async (e) => {
     }
     const packets = [];
     const okIdx = [];
+    const prints = []; // a short name for each packet's bytes (FNV-1a), to tell a repeat from news
     if (res.ok)
       for (const c of res.codewords)
         if (c.ok) {
           packets.push(c.bytes);
           okIdx.push(c.index);
+          let h = 0x811c9dc5;
+          for (let i = 0; i < c.bytes.length; i++) h = Math.imul(h ^ c.bytes[i], 0x01000193);
+          prints.push(h >>> 0);
         }
     self.postMessage(
       {
@@ -79,6 +83,7 @@ self.onmessage = async (e) => {
         frameKey: res.frameKey || null,
         skipped: !!res.skipped,
         okIdx,
+        prints,
         stats: res.ok ? res.stats : null,
         packets,
       },

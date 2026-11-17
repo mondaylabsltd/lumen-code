@@ -1,6 +1,6 @@
-# App Store listing — 1.0.1
+# App Store listing — 1.1.0
 
-可直接填写以下内容；完整描述使用旁边的纯文本文件。版本号 `1.0.1`，构建号 `2`，Bundle ID `ltd.mondaylabs.lumencode`。
+可直接填写以下内容；完整描述使用旁边的纯文本文件。版本号 `1.1.0`，构建号 `3`，Bundle ID `ltd.mondaylabs.lumencode`。
 
 | Field | English | 简体中文 |
 |---|---|---|

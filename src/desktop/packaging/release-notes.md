@@ -1,13 +1,15 @@
 ## Lumen Code <version>
 
-A UI and documentation update. The Protocol 1.0 wire format is unchanged and remains compatible with version 1.0.0.
+Faster receiving. The Protocol 1.0 wire format is unchanged, and this version transfers with every earlier 1.0 version.
 
-- A compact, centred desktop home screen with consistent send and receive entry panels.
-- Fixed-size file/text panels and aligned actions across the website, Android and iPhone apps.
-- Keyboard completion controls for text input; simpler receiving without the image-import entry.
-- A calmer website transfer illustration, matching app messaging and clearer real-device speed results.
-- Shorter privacy and service terms explaining local processing, transfer risks and responsibility boundaries.
-- Both app languages remain available offline in Android App Bundles.
+- From a 60 Hz monitor at 60 FPS to an iPhone 15 Pro, measured: 844 KB/s at density High (470–730 KB/s before) and 1.2 MB/s at density Max. Conditions and the other figures are in the [performance guide](https://github.com/mondaylabsltd/lumen-code/blob/main/docs/guide/04-performance.md).
+- The receiver scans every camera frame, each scan in about a quarter of the time, limits the exposure time, and keeps its rate on a warm phone.
+- The frame rate goes up to the screen's refresh rate; 60 is no longer a fixed top. The fastest transfer is at half the receiving camera's rate, and the receiver says so when the sender plays too fast.
+- A new desktop install starts at 60 FPS on the densest grid, four colours. The code must fill most of the receiving camera's picture; settings you chose are kept.
+- Phones: while scanning, the status and the panel turn with a phone held on its side.
+- Settings: each label sits next to its own control.
+
+The Android changes of this version compile but were not run on a phone before release.
 
 ## Desktop downloads
 
