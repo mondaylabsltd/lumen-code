@@ -310,6 +310,7 @@ fn recv_view(m: &Model) -> RecvView {
         v.error = Some(match kind {
             Denied => t(l, "camDenied").to_string(),
             Unavailable => t(l, "camNone").to_string(),
+            Busy => t(l, "camBusy").to_string(),
             Failed => format!("{}{}", t(l, "camErr"), msg),
         });
         v.can_open_settings = *kind == Denied && m.platform.mobile();
@@ -405,6 +406,21 @@ fn recv_view(m: &Model) -> RecvView {
         let landscape_code = last.and_then(|x| x.header).is_some_and(|h| h.x as f64 > h.y as f64 * 1.2);
         let k = if landscape_code && last.is_some_and(portrait) { "tipLandscape" } else { "tipCloser" };
         (t(l, k).to_string(), false)
+    } else if cell_n > 0 && cov_tot > 0 && cell < 6.5 && ok_slow < 0.08 && st.is_some_and(|s| s.span_secs > 2.0 && s.captured > 0.5) {
+        // The frames are captured, the code is located and next to nothing decodes: the cells
+        // are too small for this camera, whatever else is right. How small differs by camera:
+        // an iPhone 15 Pro reads 3.5 pixels, a Redmi K40 and a MacBook's camera 6 to 7 (the
+        // MacBook's: every frame located and no codeword at 4.2–5.5 pixels, three in four at
+        // 6.1). Closer makes them larger; when the code already fills the picture, only the
+        // sender can.
+        let fills = last.is_some_and(|x| {
+            x.corners.is_some_and(|c| {
+                let (xs, ys) = (c.map(|p| p[0]), c.map(|p| p[1]));
+                let span = |v: [f32; 4]| v.iter().fold(f32::MIN, |a, &b| a.max(b)) - v.iter().fold(f32::MAX, |a, &b| a.min(b));
+                x.frame_w > 0 && x.frame_h > 0 && (span(xs) / x.frame_w as f32).max(span(ys) / x.frame_h as f32) > 0.85
+            })
+        });
+        (t(l, if fills { "tipSparser" } else { "tipCloser" }).to_string(), false)
     } else if !moving && cov_tot > 0 && ok_rate < 0.9 && last.is_some_and(|x| skew(x) > 1.08) {
         (t(l, "tipParallel").to_string(), false)
     } else if !moving && cov_tot > 0 && ok_rate < 0.5 {
@@ -424,20 +440,17 @@ fn recv_view(m: &Model) -> RecvView {
         // 30 fps (42 %) and 399 KB/s at 20 (80 %). An OLED phone at 30 fps to a camera at 30
         // decoded 68 % on average: no gain from 20, and none is advised. (Well faster, by 1.3:
         // the sender's rate is an estimate, and in its first seconds it read 26 for a sender at 20.)
-        let n = [120.0, 60.0, 30.0, 20.0, 15.0, 12.0, 10.0].into_iter().find(|&n| n <= 0.7 * s.cam_fps)?;
+        // One number for every piece of advice on the rate: a rule of its own for torn captures
+        // (0.8 of the camera's rate) used to answer 24 where this one says 20, turn about.
+        let n = followable(s.cam_fps)?;
         (s.sender_fps > 1.3 * n && ok_slow < (0.9 * n / s.sender_fps) as f64).then_some((s, n as u32))
     }) {
         (t(l, "tipFpsDown").replace("{cam}", &format!("{:.0}", s.cam_fps)).replace("{n}", &n.to_string()), false)
-    } else if let Some(s) = st.filter(|s| s.tearing && s.span_secs > 2.0 && s.cam_fps > 0.0 && s.sender_fps > 0.95 * s.cam_fps) {
-        // torn captures: past ~0.8 of the camera's rate, each tear costs more than a frame brings
-        let n = (s.cam_fps * 0.8).round() as u32;
-        (t(l, "tipFpsDown").replace("{cam}", &format!("{:.0}", s.cam_fps)).replace("{n}", &n.to_string()), false)
-    } else if let Some(s) = st.filter(|s| {
-        // what the camera can follow: two captures per frame, or ~0.8 of its rate when torn
-        let target = if s.tearing { 0.8 * s.cam_fps } else { s.cam_fps / 2.0 };
-        s.sender_fps > 0.0 && s.captured > 0.95 && ok_rate > 0.9 && s.span_secs > 2.0 && s.load < 0.5 && 1.1 * s.sender_fps < target
+    } else if let Some((s, target)) = st.and_then(|s| {
+        // well under what the camera can follow, and all of it arrives: faster brings more
+        let target = followable(s.cam_fps)?;
+        (s.sender_fps > 0.0 && s.captured > 0.95 && ok_rate > 0.9 && s.span_secs > 2.0 && s.load < 0.5 && 1.1 * s.sender_fps < target).then_some((s, target))
     }) {
-        let target = if s.tearing { 0.8 * s.cam_fps } else { s.cam_fps / 2.0 };
         let n = target.min(s.sender_fps * 1.5).round() as u32;
         (t(l, "tipFpsUp").replace("{n}", &n.to_string()), true)
     } else if moving && st.is_some_and(|s| s.span_secs > 2.0 && s.captured > 0.9) && ok_slow > 0.6 && cell_n > 0 && cell >= 8.0 {
@@ -542,4 +555,10 @@ fn done_view(m: &Model, d: &super::DoneState) -> DoneView {
         note_ok: d.note.is_some_and(|(ok, _)| ok),
         content_rev: d.content_rev,
     }
+}
+
+/// The fastest sender rate a camera at `cam_fps` can follow, of the rates a 60 Hz screen shows
+/// evenly: within 0.7 of the camera's (60 for a camera at 120, 30 at 60, 20 at 30).
+fn followable(cam_fps: f32) -> Option<f32> {
+    [120.0, 60.0, 30.0, 20.0, 15.0, 12.0, 10.0].into_iter().find(|&n| n <= 0.7 * cam_fps)
 }

@@ -55,10 +55,17 @@ impl Camera {
     }
 }
 
+/// Whether a camera error says that another program holds the device: macOS refuses the lock
+/// a mode change needs ("Lock Rejected"), Linux answers EBUSY, Windows that the device is in
+/// use (0xC00D3704 when the capture source cannot start).
+fn in_use(error: &str) -> bool {
+    let e = error.to_lowercase();
+    ["lock rejected", "lockforconfiguration", "busy", "in use", "being used", "c00d3704"].iter().any(|s| e.contains(s))
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn capture(index: usize, rt: Runtime, stop: Arc<AtomicBool>, preview: Arc<Mutex<Option<image::RgbaImage>>>, ready: oneshot::Sender<Ready>) {
     use nokhwa::pixel_format::RgbAFormat;
-    #[cfg_attr(target_os = "macos", allow(unused_imports))]
     use nokhwa::utils::Resolution;
     use nokhwa::utils::{ApiBackend, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType};
 
@@ -87,12 +94,10 @@ fn capture(index: usize, rt: Runtime, stop: Arc<AtomicBool>, preview: Arc<Mutex<
         let _ = ready.send(Err((CameraError::Unavailable, String::new())));
         return;
     }
-    // macOS cameras offer 1080p (or 1440p) at their fastest rate. USB webcams offer their
-    // fastest rates at small sizes (640×480 at 60), too coarse for small cells: 1080p first,
-    // then 720p, at the fastest rate each has (usually MJPEG), then whatever is fastest.
-    #[cfg(target_os = "macos")]
-    let requests = [RequestedFormatType::AbsoluteHighestFrameRate];
-    #[cfg(not(target_os = "macos"))]
+    // 1080p at the fastest rate the camera has there, then 720p, then whatever is fastest.
+    // "The fastest mode" alone is no choice: USB webcams have their fastest rates at small
+    // sizes (640×480 at 60), too coarse for small cells, and a MacBook's camera has every size
+    // at the same 30 frames a second (1920×1080 down to 640×480, upright ones among them).
     let requests = [
         RequestedFormatType::HighestResolution(Resolution::new(1920, 1080)),
         RequestedFormatType::HighestResolution(Resolution::new(1280, 720)),
@@ -101,24 +106,45 @@ fn capture(index: usize, rt: Runtime, stop: Arc<AtomicBool>, preview: Arc<Mutex<
     let idx = CameraIndex::Index((index % devices) as u32);
     let mut last_err = String::new();
     let mut opened = None;
-    for req in requests {
-        match nokhwa::Camera::new(idx.clone(), RequestedFormat::new::<RgbAFormat>(req)) {
-            Ok(c) => {
-                opened = Some(c);
-                break;
+    // (twice: a program that is only setting its own mode lets go of the camera at once)
+    'open: for attempt in 0..2 {
+        for req in requests {
+            match nokhwa::Camera::new(idx.clone(), RequestedFormat::new::<RgbAFormat>(req)) {
+                Ok(c) => {
+                    opened = Some(c);
+                    break 'open;
+                }
+                Err(e) => last_err = e.to_string(),
             }
-            Err(e) => last_err = e.to_string(),
+        }
+        if attempt == 0 && in_use(&last_err) {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        } else {
+            break;
         }
     }
     let Some(mut camera) = opened else {
-        let _ = ready.send(Err((CameraError::Failed, last_err)));
+        let kind = if in_use(&last_err) { CameraError::Busy } else { CameraError::Failed };
+        let _ = ready.send(Err((kind, last_err)));
         return;
     };
     if let Err(e) = camera.open_stream() {
-        let _ = ready.send(Err((CameraError::Failed, e.to_string())));
+        let msg = e.to_string();
+        let kind = if in_use(&msg) { CameraError::Busy } else { CameraError::Failed };
+        let _ = ready.send(Err((kind, msg)));
         return;
     }
     let _ = ready.send(Ok((devices as u32, camera.camera_format().frame_rate())));
+    // (with a debug script: which camera and mode were taken, of which)
+    if std::env::var_os("LUMEN_SCRIPT").is_some() {
+        let name = camera.info().human_name();
+        eprintln!("[lumen-camera] device {} of {devices}: {name} · mode {}", index % devices, camera.camera_format());
+        if let Ok(mut all) = camera.compatible_camera_formats() {
+            all.sort_by_key(|f| (f.resolution().width(), f.frame_rate()));
+            let list: Vec<String> = all.iter().map(|f| format!("{}x{}@{} {:?}", f.resolution().width(), f.resolution().height(), f.frame_rate(), f.format())).collect();
+            eprintln!("[lumen-camera] offered: {}", list.join(", "));
+        }
+    }
     let mut n = 0u64;
     while !stop.load(Ordering::SeqCst) {
         let Ok(buffer) = camera.frame() else {

@@ -1053,7 +1053,7 @@ fn camera_answer(model: &mut Model, attempt: u64, out: ShellOutput) -> Cmd {
             let rezoom = (z - zoom).abs() > 0.01;
             model.recv.phase = RecvPhase::Scanning;
             model.recv.from_image = false;
-            let mut cmds = vec![engine_notify(EngineOp::RecvActive { on: true }), start_tick(model)];
+            let mut cmds = vec![engine_notify(EngineOp::RecvEager { on: !model.platform.mobile() }), engine_notify(EngineOp::RecvActive { on: true }), start_tick(model)];
             if rezoom {
                 cmds.push(notify(ShellOp::CameraZoom { level: z }));
             }

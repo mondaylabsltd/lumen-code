@@ -53,7 +53,8 @@ pub async fn run(this: WeakEntity<Root>, cx: &mut AsyncWindowContext, script: St
             "diag" => {
                 let v = rt.view();
                 let done = v.recv.done.as_ref().map_or(String::new(), |d| format!(" · done: {} {}", d.name, d.sub));
-                eprintln!("[lumen-diag] {:?} {} {} · {} · {}{done} · build {} {}", v.recv.phase, v.recv.pct, v.recv.status, v.recv.diag, v.recv.tip, env!("CARGO_PKG_VERSION"), v.build);
+                let metrics: Vec<String> = v.recv.metrics.iter().map(|m| format!("{} {}", m.label, m.value)).collect();
+                eprintln!("[lumen-diag] {:?} {} {} · {} · {} · {}{done} · build {} {}", v.recv.phase, v.recv.pct, v.recv.status, metrics.join(" "), v.recv.diag, v.recv.tip, env!("CARGO_PKG_VERSION"), v.build);
             }
             "fps" => rt.dispatch(Event::SetFps { value: arg.parse().unwrap_or(30) }),
             "density" => rt.dispatch(Event::SetDensity {

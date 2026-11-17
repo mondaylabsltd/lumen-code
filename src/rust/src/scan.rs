@@ -396,10 +396,10 @@ impl Scanner {
         self.lean = Some(lean);
     }
 
-    /// Where the chroma samples of [`Scanner::scan_yuv`]'s planes lie, for the cell-by-cell
-    /// reader: level with the even luma columns (`true`; video's convention, what Safari
-    /// gives) or centred on their four luma pixels (the default; what Chrome on Android
-    /// gives, and how the plane reader takes it).
+    /// Where the chroma samples of [`Scanner::scan_yuv`]'s planes lie: level with the even luma
+    /// columns (`true`; video's convention, what Safari gives, and what planes made from
+    /// YUYV are) or centred on their four luma pixels (the default; what Chrome on Android
+    /// gives).
     pub fn set_chroma_left(&mut self, left: bool) {
         self.chroma_left = left;
     }
@@ -609,9 +609,9 @@ impl<'a> Ctx<'a> {
 
     /// Cb, Cr (centred on 0) at a luma-pixel position, bilinear.
     #[inline]
-    fn chroma_at(x: f64, y: f64, cbcr: &[u8], cw: usize, ch: usize) -> (f64, f64) {
+    fn chroma_at(x: f64, y: f64, cbcr: &[u8], cw: usize, ch: usize, left: bool) -> (f64, f64) {
         // chroma sample (cx, cy) is centred on luma (2cx + 1, 2cy + 1)
-        let cx = ((x - 0.5) * 0.5 - 0.25).clamp(0.0, cw as f64 - 1.001);
+        let cx = ((x - 0.5) * 0.5 - if left { 0.0 } else { 0.25 }).clamp(0.0, cw as f64 - 1.001);
         let cy = ((y - 0.5) * 0.5 - 0.25).clamp(0.0, ch as f64 - 1.001);
         let (jx, jy) = (cx as usize, cy as usize);
         let (bx, by) = (cx - jx as f64, cy - jy as f64);
@@ -639,7 +639,7 @@ impl<'a> Ctx<'a> {
                     + self.luma_at(px + dv[0], py + dv[1])
                     + self.luma_at(px - dv[0], py - dv[1]);
                 let yv = l / 6.0;
-                let (cb, cr) = Self::chroma_at(px, py, cbcr, cw, ch);
+                let (cb, cr) = Self::chroma_at(px, py, cbcr, cw, ch, self.chroma_left);
                 [
                     6.0 * (yv + 1.402 * cr).clamp(0.0, 255.0),
                     6.0 * (yv - 0.344_136 * cb - 0.714_136 * cr).clamp(0.0, 255.0),
@@ -680,7 +680,7 @@ impl<'a> Ctx<'a> {
                 let (i, j) = (i / 4, j / 4);
                 let yv = l[i] as f64 * w00 + l[i + 1] as f64 * w10 + l[j] as f64 * w01 + l[j + 1] as f64 * w11;
                 // chroma sample (cx, cy) is centred on luma (2cx + 1, 2cy + 1)
-                let cx = (x * 0.5 - 0.25).clamp(0.0, cw as f64 - 1.001);
+                let cx = (x * 0.5 - if self.chroma_left { 0.0 } else { 0.25 }).clamp(0.0, cw as f64 - 1.001);
                 let cy = (y * 0.5 - 0.25).clamp(0.0, ch as f64 - 1.001);
                 let (jx, jy) = (cx as usize, cy as usize);
                 let (bx, by) = (cx - jx as f64, cy - jy as f64);
@@ -1872,7 +1872,7 @@ impl<'a> Ctx<'a> {
                 Pixels::Yuv { cbcr, cw, ch } if self.lean => Lean { luma: self.luma, colour: Colour::Planes { cbcr, cw, ch, left: self.chroma_left }, w: self.w, h: self.h }.sample(cell_px, &slots, &at, &mut cells),
                 Pixels::Yuv { cbcr, cw, ch } => {
                     let corners = [gpt(kk[TL]), gpt(kk[TR]), gpt(kk[BR]), gpt(kk[BL])];
-                    let cam = Camera { luma: self.luma, w: self.w, h: self.h, cbcr, cw, ch };
+                    let cam = Camera { luma: self.luma, w: self.w, h: self.h, cbcr, cw, ch, left: self.chroma_left };
                     let mut bufs = self.soft.borrow_mut();
                     let (soft, rows) = &mut *bufs;
                     let area = cam.smooth(&corners, cell_px, soft, rows);
@@ -2046,6 +2046,8 @@ struct Camera<'a> {
     cbcr: &'a [u8],
     cw: usize,
     ch: usize,
+    /// Chroma samples level with the even luma columns, not centred (see [`Colour::Planes`]).
+    left: bool,
 }
 
 /// Where each data slot is in the grid and among the located lattice points.
@@ -2134,6 +2136,7 @@ impl Camera<'_> {
         let (lx0, lx1) = (x0 as f32, (x1 - 1) as f32 - 0.01);
         let (ly0, ly1) = (y0 as f32, (y1 - 1) as f32 - 0.01);
         let (cx1, cy1) = (self.cw as f32 - 1.01, self.ch as f32 - 1.01);
+        let cxo: f32 = if self.left { 0.0 } else { 0.25 };
         let (cw, cbcr) = (self.cw, self.cbcr);
         let (xg, yg) = (grid.layout.x, grid.layout.y);
         let nx = at.nx;
@@ -2194,7 +2197,7 @@ impl Camera<'_> {
                     let a = top[0] as f32 + (top[1] as f32 - top[0] as f32) * ax;
                     let b = bot[0] as f32 + (bot[1] as f32 - bot[0] as f32) * ax;
                     let yv = a + (b - a) * ay;
-                    let x = ((px - 0.5) * 0.5 - 0.25).clamp(0.0, cx1);
+                    let x = ((px - 0.5) * 0.5 - cxo).clamp(0.0, cx1);
                     let y = ((py - 0.5) * 0.5 - 0.25).clamp(0.0, cy1);
                     let (jx, jy) = (x as usize, y as usize);
                     let (bx, by) = (x - jx as f32, y - jy as f32);
@@ -2231,6 +2234,7 @@ impl Camera<'_> {
         let (lx0, lx1) = (x0 as f64, (x1 - 1) as f64 - 0.001);
         let (ly0, ly1) = (y0 as f64, (y1 - 1) as f64 - 0.001);
         let (cx1, cy1) = (self.cw as f64 - 1.001, self.ch as f64 - 1.001);
+        let cxo: f64 = if self.left { 0.0 } else { 0.25 };
         let (cw, cbcr) = (self.cw, self.cbcr);
         let refs: Vec<[f32; 6]> = at.refs.chunks_exact(6).map(|r| [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32, r[4] as f32, r[5] as f32]).collect();
         let nx = at.nx;
@@ -2254,7 +2258,7 @@ impl Camera<'_> {
             let b = bot[0] as f32 + (bot[1] as f32 - bot[0] as f32) * ax;
             let yv = a + (b - a) * ay;
             // chroma: sample (cx, cy) is centred on luma (2cx + 1, 2cy + 1)
-            let x = ((px - 0.5) * 0.5 - 0.25).clamp(0.0, cx1);
+            let x = ((px - 0.5) * 0.5 - cxo).clamp(0.0, cx1);
             let y = ((py - 0.5) * 0.5 - 0.25).clamp(0.0, cy1);
             let (jx, jy) = (x as usize, y as usize);
             let (bx, by) = ((x - jx as f64) as f32, (y - jy as f64) as f32);

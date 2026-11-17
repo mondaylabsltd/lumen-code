@@ -1441,9 +1441,9 @@ export class ReceiveController {
 			okRate > 0.9 &&
 			dt > 2 &&
 			load < 0.5 &&
-			camFps > 2.2 * senderFps
+			slower > 1.1 * senderFps
 		) {
-			msg = t('tipFpsUp').replace('{n}', String(Math.round(Math.min(camFps / 2, senderFps * 1.5))));
+			msg = t('tipFpsUp').replace('{n}', String(Math.round(Math.min(slower, senderFps * 1.5))));
 			good = true;
 		} else if (
 			slower &&

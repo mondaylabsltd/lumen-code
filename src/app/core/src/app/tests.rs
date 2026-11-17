@@ -418,6 +418,32 @@ fn a_sender_as_fast_as_the_camera_is_told_to_halve() {
     assert!(!view::view(&m).recv.tip.contains("20"), "{}", view::view(&m).recv.tip);
 }
 
+/// A code that is captured and located but does not decode, its cells small: closer, when it
+/// does not fill the picture yet; a lower density at the sender when it does.
+#[test]
+fn small_cells_that_do_not_decode_ask_for_closer_or_sparser() {
+    use crate::engine::recv::{LiveStats, ScanReport};
+    let now = 10_000.0;
+    let mut m = Model { screen: Screen::Receive, now, ..Model::default() };
+    m.recv.phase = RecvPhase::Scanning;
+    m.recv.found = true;
+    m.recv.ok_slow = 0.01;
+    let stats = LiveStats { last_found_at: now - 50.0, cov_ok: 0, cov_tot: 100, cell: 5.4, cell_n: 9, cam_fps: 30.0, sender_fps: 20.0, span_secs: 2.5, captured: 0.9, ..LiveStats::default() };
+    let at = |corners: [[f32; 2]; 4]| ScanReport { at: now - 50.0, ok: true, stats: stats.clone(), corners: Some(corners), frame_w: 1920, frame_h: 1080, ..Default::default() };
+    // half the picture's width
+    m.recv.last = Some(at([[480.0, 300.0], [1440.0, 300.0], [1440.0, 780.0], [480.0, 780.0]]));
+    let tip = view::view(&m).recv.tip;
+    assert!(tip.contains("靠近") || tip.contains("closer"), "{tip}");
+    // all of it
+    m.recv.last = Some(at([[40.0, 60.0], [1880.0, 60.0], [1880.0, 1020.0], [40.0, 1020.0]]));
+    let tip = view::view(&m).recv.tip;
+    assert!((tip.contains("密度") || tip.contains("density")) && !(tip.contains("靠近") || tip.contains("closer")), "{tip}");
+    // cells this size that do decode are left alone
+    m.recv.ok_slow = 0.7;
+    let tip = view::view(&m).recv.tip;
+    assert!(!(tip.contains("靠近") || tip.contains("closer") || tip.contains("分不清")), "{tip}");
+}
+
 /// A warm phone keeps the fast capture mode (fair, serious): giving it up is the loss of rate
 /// the person came to avoid. Only the critical level, where the system is about to stop the
 /// camera itself, takes it back to 60.

@@ -92,6 +92,8 @@ pub enum CameraError {
     Denied,
     /// No usable camera.
     Unavailable,
+    /// Another program holds the camera.
+    Busy,
     /// Anything else; the message says what.
     Failed,
 }
@@ -162,6 +164,8 @@ pub enum EngineOp {
     StopSender,
     /// Accept camera frames for scanning, or ignore them.
     RecvActive { on: bool },
+    /// Look for a code on every frame (a desktop), not a few times a second (a phone).
+    RecvEager { on: bool },
     /// Forget the current reception; results of older generations are dropped.
     ResetRecv { generation: u64 },
     /// The device's heat (0 cool … 3 critical): the receiver scans less as it warms.

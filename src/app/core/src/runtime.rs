@@ -613,6 +613,10 @@ impl Inner {
                 lock(&self.recv).heat = *level;
                 None
             }
+            EngineOp::RecvEager { on } => {
+                lock(&self.recv).eager = *on;
+                None
+            }
             EngineOp::ResetRecv { generation } => {
                 lock(&self.recv).reset(*generation);
                 self.sink.reset(*generation);
@@ -704,7 +708,7 @@ impl Inner {
 }
 
 fn expects_answer(op: &EngineOp) -> bool {
-    !matches!(op, EngineOp::StopSender | EngineOp::RecvActive { .. } | EngineOp::ResetRecv { .. } | EngineOp::Heat { .. })
+    !matches!(op, EngineOp::StopSender | EngineOp::RecvActive { .. } | EngineOp::RecvEager { .. } | EngineOp::ResetRecv { .. } | EngineOp::Heat { .. })
 }
 
 fn random_tid() -> u16 {

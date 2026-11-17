@@ -237,6 +237,11 @@ pub struct RecvEngine {
     yield_avg: f64,
     /// The device's heat, 0 (cool) to 3 (critical): caps the scan rate.
     pub heat: u8,
+    /// A host with no battery or heat to spare for (a desktop): it looks for a code as hard
+    /// as it reads one. Every frame is searched, at full resolution, where a phone searches a
+    /// few times a second and mostly at half resolution; a code that comes into view, or back
+    /// into it after the hand moved, locks on the next frame.
+    pub eager: bool,
     /// Scans the heat budget still allows (a token bucket), and when it was last filled.
     tokens: f64,
     tokens_at: f64,
@@ -280,6 +285,7 @@ impl RecvEngine {
             readout_ms: 0.0,
             yield_avg: 1.0,
             heat: 0,
+            eager: false,
             tokens: 0.0,
             tokens_at: 0.0,
             heat_refused_at: f64::NEG_INFINITY,
@@ -290,12 +296,13 @@ impl RecvEngine {
 
     /// A new reception: forget every frame, statistic and header.
     pub fn reset(&mut self, generation: u64) {
-        let (active, workers, activated_at, readout, heat) = (self.active, self.workers, self.activated_at, self.readout_ms, self.heat);
+        let (active, workers, activated_at, readout, heat, eager) = (self.active, self.workers, self.activated_at, self.readout_ms, self.heat, self.eager);
         *self = RecvEngine { img: std::mem::take(&mut self.img), ..RecvEngine::new() };
         self.active = active;
         self.workers = workers;
         self.readout_ms = readout;
         self.heat = heat;
+        self.eager = eager;
         self.activated_at = activated_at;
         self.generation = generation;
     }
@@ -338,6 +345,10 @@ impl RecvEngine {
         }
         // idle times count from the last code seen, or from the camera opening
         let seen = self.last_found_at.max(self.activated_at);
+        if self.eager {
+            // every frame; after a minute with nothing in view (a window left open), ten a second
+            return now - seen < 60_000.0 || since >= 1000.0 / 10.0;
+        }
         if now - seen > 10_000.0 {
             return since >= 1000.0 / 2.0;
         }
@@ -394,7 +405,7 @@ impl RecvEngine {
         // a region measured on another frame size (the phone was turned) no longer applies
         let crop = match self.roi {
             Some(r) if r.fw == fw && r.fh == fh => r.crop,
-            _ if track && now - self.last_found_at > 700.0 && fw.min(fh) >= 720 => {
+            _ if track && !self.eager && now - self.last_found_at > 700.0 && fw.min(fh) >= 720 => {
                 // Searching a whole frame: two of three at half resolution (a finder is found
                 // at three pixels per cell), every third at full resolution for small codes.
                 self.searches += 1;
@@ -725,6 +736,27 @@ mod tests {
         // complete: from now on the frame costs a header read
         let p = plan(&mut rx, 24.0);
         assert_eq!(p.skip.iter().find(|(k, _)| k.seq == 8).map(|(_, done)| done.len()), Some(4));
+    }
+
+    /// A desktop looks for a code on every frame and at full resolution; a phone a few times
+    /// a second, two searches of three at half resolution.
+    #[test]
+    fn a_desktop_searches_every_frame() {
+        for (eager, all) in [(false, false), (true, true)] {
+            let mut rx = RecvEngine::new();
+            rx.eager = eager;
+            rx.set_active(true, 0.0);
+            let (mut scans, mut whole) = (0, 0);
+            // five seconds of a camera at 30 frames a second, nothing in view since it opened
+            for i in 0..150 {
+                if let Some(p) = rx.plan(1920, 1080, 0, 3000.0 + i as f64 * 33.3, true) {
+                    scans += 1;
+                    whole += (p.crop.k == 1.0) as usize;
+                }
+            }
+            assert_eq!(scans == 150 && whole == 150, all, "eager {eager}: {scans} scans of 150 frames, {whole} at full resolution");
+            assert!(eager || (scans >= 20 && scans <= 30 && whole < scans), "a phone: {scans} scans, {whole} whole");
+        }
     }
 
     /// Warm and very warm phones scan every capture; the critical level scans to a budget.
