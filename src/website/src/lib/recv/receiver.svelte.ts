@@ -6,6 +6,7 @@ import { fmtBytes, fmtTime } from '#lib/format';
 import { buildText } from '#lib/build';
 import { isJson, formatJson, safeName } from '#lib/text-view';
 import { chromaSiting, mayHoldExposure } from './exposure';
+import { mainCameras, type Facing, type MainCameras } from './cameras';
 
 // phones: 2 decode workers is plenty once scanning is paced; more just burns battery
 const FRAME_KEY_MS = 1000; // a frame key names a frame for 1 s (PROTOCOL §11.5)
@@ -142,6 +143,13 @@ export class ReceiveController {
 	private track: MediaStreamTrack | null = null;
 	private deviceIds: string[] = [];
 	private deviceIdx = -1;
+	// The side the camera is on, the main camera of each side where they can be told apart
+	// (see cameras.ts), and how the flip button works: back and front, or, where cameras have
+	// no side (a desktop), round all of them.
+	private facing: Facing = 'environment';
+	private mains: MainCameras = {};
+	private flipBySide = false;
+	private cycling = false;
 	private frameId = 0;
 	private fallbackCanvas: HTMLCanvasElement | null = null;
 	private fallbackCtx: CanvasRenderingContext2D | null = null;
@@ -316,7 +324,8 @@ export class ReceiveController {
 			workers: this.NW,
 			bitmap: this.useBitmap,
 			path: this.exactPath() ? 'exact' : this.useFrames ? `planes ${this.chroma}` : 'camera',
-			note: this.camNote
+			note: this.camNote,
+			camera: track?.label
 		};
 		// what the camera is set to, and how bright the picture is (a small copy of it)
 		const st: any = settings;
@@ -601,7 +610,7 @@ export class ReceiveController {
 	}
 
 	// ---------- camera
-	async openCamera() {
+	async openCamera(): Promise<void> {
 		this.startErr = '';
 		if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
 			this.startErr = this.t('needHttps');
@@ -620,38 +629,94 @@ export class ReceiveController {
 		this.videoSize = { width: { ideal: dims[0] }, height: { ideal: dims[1] } };
 		this.camRate = 30;
 		const video0: MediaTrackConstraints = { ...this.videoSize, frameRate: { ideal: 30, max: 30 } };
-		if (this.deviceIdx >= 0 && this.deviceIds[this.deviceIdx])
-			video0.deviceId = { exact: this.deviceIds[this.deviceIdx] };
-		else video0.facingMode = { ideal: 'environment' };
-		try {
-			this.stopStream();
-			this.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: video0 });
-		} catch (err) {
-			this.startErr = this.t('camErr') + (err instanceof Error ? err.message : String(err));
+		// (a browser that has the permission from an earlier visit names its cameras already)
+		if (!this.mains.environment && !this.mains.user) {
+			this.mains = await navigator.mediaDevices
+				.enumerateDevices()
+				.then(mainCameras)
+				.catch(() => ({}));
+		}
+		const named = this.cycling ? this.deviceIds[this.deviceIdx] : this.mains[this.facing];
+		if (named) video0.deviceId = { exact: named };
+		else video0.facingMode = { ideal: this.facing };
+		this.stopStream();
+		let stream: MediaStream | null = null;
+		let failure: unknown = null;
+		for (let attempt = 0; attempt < 3 && !stream; attempt++) {
+			try {
+				stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: video0 });
+			} catch (err) {
+				failure = err;
+				const name = err instanceof Error ? err.name : '';
+				if ((name === 'OverconstrainedError' || name === 'NotFoundError') && video0.deviceId) {
+					// the camera named is gone: the browser's choice for this side
+					delete video0.deviceId;
+					video0.facingMode = { ideal: this.facing };
+					this.mains = {};
+					this.cycling = false;
+				} else if (name === 'NotReadableError' || name === 'AbortError') {
+					// A phone opens one camera at a time, and the one just closed is not free at
+					// once: on a Galaxy S22, a camera opened straight after another failed, and
+					// opened 0.7 s later.
+					await new Promise((done) => setTimeout(done, 450));
+				} else break;
+			}
+		}
+		if (!stream) {
+			const name = failure instanceof Error ? failure.name : '';
+			this.startErr =
+				name === 'NotReadableError'
+					? this.t('camBusy')
+					: this.t('camErr') + (failure instanceof Error ? failure.message : String(failure));
 			return;
 		}
+		this.stream = stream;
 		this.track = this.stream.getVideoTracks()[0];
+		const settings = this.track.getSettings();
+		try {
+			const devs = await navigator.mediaDevices.enumerateDevices();
+			this.deviceIds = devs.filter((d) => d.kind === 'videoinput').map((d) => d.deviceId);
+			const cur = settings.deviceId || '';
+			this.deviceIdx = Math.max(0, this.deviceIds.indexOf(cur));
+			// The browser chose, and the names are known only now: if its choice for this side
+			// is not the main camera (Chrome on a Galaxy S22 gives the ultra-wide), open that.
+			const mains = mainCameras(devs);
+			const main = mains[this.facing];
+			if (!named && main && main !== cur) {
+				this.mains = mains;
+				return this.openCamera();
+			}
+			if (mains.environment || mains.user) this.mains = mains;
+			// flipping is back and front where cameras have a side; else round all of them
+			const sided = settings.facingMode === 'environment' || settings.facingMode === 'user';
+			this.flipBySide =
+				!!(this.mains.environment && this.mains.user) || (sided && this.deviceIds.length >= 2);
+			if (sided && !this.cycling) this.facing = settings.facingMode as Facing;
+			this.multiCam = this.flipBySide || this.deviceIds.length >= 2;
+		} catch {
+			/* ignore */
+		}
 		const video = this.video;
 		video.srcObject = this.stream;
 		video.removeAttribute('src');
 		video.loop = false;
 		await video.play().catch(() => {});
 		this.setupTrackControls();
-		try {
-			const devs = await navigator.mediaDevices.enumerateDevices();
-			this.deviceIds = devs.filter((d) => d.kind === 'videoinput').map((d) => d.deviceId);
-			const cur = this.track.getSettings().deviceId || '';
-			this.deviceIdx = Math.max(0, this.deviceIds.indexOf(cur));
-			this.multiCam = this.deviceIds.length >= 2;
-		} catch {
-			/* ignore */
-		}
 		this.beginScanning();
 	}
 
+	// The flip button: the main camera at the back and the main one at the front, as a phone's
+	// own camera app has it; not a walk through every lens (an S22 has four, an iPhone more).
+	// Cameras without a side (a desktop's) are taken in turn.
 	switchCamera() {
-		if (this.deviceIds.length < 2) return;
-		this.deviceIdx = (this.deviceIdx + 1) % this.deviceIds.length;
+		if (this.flipBySide) {
+			this.facing = this.facing === 'environment' ? 'user' : 'environment';
+			this.cycling = false;
+		} else {
+			if (this.deviceIds.length < 2) return;
+			this.cycling = true;
+			this.deviceIdx = (this.deviceIdx + 1) % this.deviceIds.length;
+		}
 		this.openCamera();
 	}
 
