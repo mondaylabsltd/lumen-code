@@ -2,7 +2,7 @@
 // this file wraps its C ABI in classes with the same shape as the JS Scanner / Sender /
 // Receiver, so the app can switch engines freely.
 
-import { makeLayout, codewordsPerFrame } from './layout.js?v=e1f4d8d604';
+import { makeLayout, codewordsPerFrame } from './layout.js?v=d29978964e';
 
 let X = null; // wasm exports
 
