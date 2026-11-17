@@ -5,6 +5,7 @@ import { t as tr, type Key, type Lang } from '#lib/i18n';
 import { fmtBytes, fmtTime } from '#lib/format';
 import { buildText } from '#lib/build';
 import { isJson, formatJson, safeName } from '#lib/text-view';
+import { chromaSiting, mayHoldExposure } from './exposure';
 
 // phones: 2 decode workers is plenty once scanning is paced; more just burns battery
 const FRAME_KEY_MS = 1000; // a frame key names a frame for 1 s (PROTOCOL §11.5)
@@ -113,10 +114,11 @@ export class ReceiveController {
 	// (development: VITE_LUMEN_PARAMS on the dev server adds parameters to every visit, so a
 	// phone can be measured without typing a query string on it)
 	private params = new URLSearchParams(
+		// (the first of a name counts: the address, then what the desk set, then the server's)
 		[
-			import.meta.env.DEV ? (import.meta.env.VITE_LUMEN_PARAMS ?? '') : '',
+			location.search.slice(1),
 			import.meta.env.DEV ? (sessionStorage.getItem('lumen-dev') ?? '') : '',
-			location.search.slice(1)
+			import.meta.env.DEV ? (import.meta.env.VITE_LUMEN_PARAMS ?? '') : ''
 		]
 			.filter(Boolean)
 			.join('&')
@@ -130,6 +132,8 @@ export class ReceiveController {
 	// camera frames as planes (see grab()); ?frames=0 keeps to the canvas, for comparing
 	private useFrames = typeof VideoFrame !== 'undefined' && this.params.get('frames') !== '0';
 	private framePool: Uint8Array[] = [];
+	// (development: ?chroma=left or centre, for comparing)
+	private chroma = this.params.get('chroma') || chromaSiting(navigator.vendor);
 	private scanMs: number[] = [];
 	private engineNoteUntil = 0;
 	private engineNote = '';
@@ -203,6 +207,9 @@ export class ReceiveController {
 		this.video = video;
 		this.overlay = overlay;
 		this.octx = overlay.getContext('2d')!;
+		// (development: ?autostart=1 opens the camera without a tap, for a phone driven from the desk)
+		if (import.meta.env.DEV && this.params.has('autostart'))
+			setTimeout(() => this.openCamera(), 300);
 		for (let i = 0; i < this.NW; i++) {
 			const w = new Worker(new URL('./scan.worker.ts', import.meta.url), {
 				type: 'module'
@@ -289,6 +296,7 @@ export class ReceiveController {
 	private reportAt = 0;
 	private reportedCaps = false;
 	private reasons: Record<string, number> = {};
+	private lumaCanvas: HTMLCanvasElement | null = null;
 	private report(now: number) {
 		if (now - this.reportAt < 1000) return;
 		this.reportAt = now;
@@ -307,9 +315,23 @@ export class ReceiveController {
 			tip: this.tip,
 			workers: this.NW,
 			bitmap: this.useBitmap,
-			path: this.exactPath() ? 'exact' : this.useFrames ? 'planes' : 'camera',
+			path: this.exactPath() ? 'exact' : this.useFrames ? `planes ${this.chroma}` : 'camera',
 			note: this.camNote
 		};
+		// what the camera is set to, and how bright the picture is (a small copy of it)
+		const st: any = settings;
+		if (st.exposureMode)
+			line.exposure = `${st.exposureMode} ${st.exposureTime} iso ${st.iso} comp ${st.exposureCompensation}`;
+		const lum = this.brightness(null);
+		if (lum) line.luma = `mean ${lum.mean} p95 ${lum.p95}`;
+		if (this.expoCaps)
+			line.auto = this.expoOn ? `on ${this.expoTime.toFixed(1)} iso ${this.expoIso}` : 'off';
+		if (st.zoom) line.zoom = st.zoom;
+		if (this.lastSeen && this.video.videoWidth) {
+			// how much of the picture's width the code takes
+			const xs = this.lastSeen.corners.map((c) => c[0]);
+			line.fill = Math.round((100 * (Math.max(...xs) - Math.min(...xs))) / this.video.videoWidth);
+		}
 		if (Object.keys(this.reasons).length) {
 			line.misses = this.reasons; // why scans found no code, this second
 			this.reasons = {};
@@ -339,7 +361,23 @@ export class ReceiveController {
 				}
 				if (q.has('grab')) this.grabbed = false;
 				if (q.has('bench')) this.bench(Number(q.get('bench')));
+				// exp=<exposure time, 100 µs units> [iso=<n>] holds an exposure; exp=auto gives it back
+				if (q.has('exp') && this.track) {
+					const exp = q.get('exp');
+					this.params.set('exposure', 'off');
+					const set: Record<string, unknown> =
+						exp === 'auto'
+							? { exposureMode: 'continuous' }
+							: { exposureMode: 'manual', exposureTime: Number(exp) };
+					if (q.get('iso')) set.iso = Number(q.get('iso'));
+					this.track
+						.applyConstraints({ advanced: [set as any] })
+						.then(() => (this.camNote = `exposure set ${JSON.stringify(set)}`))
+						.catch((err) => (this.camNote = `exposure refused: ${err}`));
+				}
 				if (q.has('probe')) this.probe();
+				if (q.has('trycam')) this.tryCameras(q.get('trycam')!);
+				if (q.has('zoom')) this.setZoom(Number(q.get('zoom')));
 				if (reload) {
 					// kept for this tab, so the parameters outlive the reload
 					const keep = new URLSearchParams(sessionStorage.getItem('lumen-dev') ?? '');
@@ -389,6 +427,58 @@ export class ReceiveController {
 			this.benching = false;
 		};
 		w.postMessage({ bench: n, bitmap: bmp, dw: sw, dh: sh, engine: this.engine }, [bmp]);
+	}
+
+	// Development only: which picture sizes this browser's camera really opens at, and how many
+	// frames a second it then gives (trycam=2560x1440,3840x2160,…; add @<fps> to ask for a rate).
+	// The camera in use is closed for it and opened again afterwards.
+	private async tryCameras(list: string) {
+		const out: Record<string, unknown> = {};
+		this.running = false;
+		this.stopStream();
+		for (const item of list.split(',')) {
+			const [size, rate] = item.split('@');
+			const [w, h] = size.split('x').map(Number);
+			const video: MediaTrackConstraints = {
+				facingMode: { ideal: 'environment' },
+				width: { ideal: w },
+				height: { ideal: h }
+			};
+			if (rate) video.frameRate = { ideal: Number(rate) };
+			try {
+				const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video });
+				const got = stream.getVideoTracks()[0].getSettings();
+				const el = document.createElement('video');
+				el.muted = true;
+				el.playsInline = true;
+				el.srcObject = stream;
+				await el.play().catch(() => {});
+				let frames = 0;
+				let fmt = '';
+				const count = () => {
+					frames++;
+					el.requestVideoFrameCallback(count);
+				};
+				el.requestVideoFrameCallback(count);
+				await new Promise((done) => setTimeout(done, 2000));
+				try {
+					const vf = new VideoFrame(el);
+					fmt = `${vf.format} ${vf.codedWidth}x${vf.codedHeight}`;
+					vf.close();
+				} catch (err) {
+					fmt = String(err);
+				}
+				out[item] =
+					`settings ${got.width}x${got.height}@${got.frameRate} · video ${el.videoWidth}x${el.videoHeight} · ${(frames / 2).toFixed(1)} fps · ${fmt}`;
+				for (const tr of stream.getTracks()) tr.stop();
+				el.srcObject = null;
+			} catch (err) {
+				out[item] = `refused: ${err}`;
+			}
+			await new Promise((done) => setTimeout(done, 400));
+		}
+		this.benchResult = { trycam: out };
+		await this.openCamera();
 	}
 
 	// Development only: what a WebCodecs VideoFrame of the camera holds here, and what copying
@@ -518,7 +608,14 @@ export class ReceiveController {
 			return;
 		}
 		const res = this.params.get('res') || '1080';
-		const dims = res === '4k' ? [3840, 2160] : res === '720' ? [1280, 720] : [1920, 1080];
+		const wxh = /^(\d+)x(\d+)$/.exec(res); // (development: ?res=2560x1440)
+		const dims = wxh
+			? [Number(wxh[1]), Number(wxh[2])]
+			: res === '4k'
+				? [3840, 2160]
+				: res === '720'
+					? [1280, 720]
+					: [1920, 1080];
 		// 30 fps to start; adaptCameraRate() asks for 60 when the sender plays fast enough
 		this.videoSize = { width: { ideal: dims[0] }, height: { ideal: dims[1] } };
 		this.camRate = 30;
@@ -643,9 +740,131 @@ export class ReceiveController {
 		this.camRateAt = performance.now();
 	}
 
+	// How bright the picture is, from a small copy of it (or of the box given, in camera pixels):
+	// the mean and the level a twentieth of it is above.
+	private brightness(box: number[] | null) {
+		const video = this.video;
+		if (!video.videoWidth) return null;
+		if (!this.lumaCanvas) {
+			this.lumaCanvas = document.createElement('canvas');
+			this.lumaCanvas.width = 64;
+			this.lumaCanvas.height = 36;
+		}
+		const [x, y, w, h] = box ?? [0, 0, video.videoWidth, video.videoHeight];
+		const lc = this.lumaCanvas.getContext('2d', { willReadFrequently: true })!;
+		lc.drawImage(video, x, y, w, h, 0, 0, 64, 36);
+		const px = lc.getImageData(0, 0, 64, 36).data;
+		const ls: number[] = [];
+		for (let i = 0; i < px.length; i += 4)
+			ls.push((px[i] * 77 + px[i + 1] * 150 + px[i + 2] * 29) >> 8);
+		ls.sort((a, b) => a - b);
+		return {
+			mean: Math.round(ls.reduce((a, b) => a + b, 0) / ls.length),
+			p95: ls[Math.floor(ls.length * 0.95)],
+			p99: ls[Math.floor(ls.length * 0.99)]
+		};
+	}
+
+	// ---------- exposure
+	// Where the page may set the exposure (Chrome on Android; never WebKit, see exposure.ts):
+	// a short one while a code is in view. Left to itself a camera exposes a screen in a
+	// room for a whole frame period (measured in Chrome: 30 ms on a Redmi K40, 33 ms on a
+	// Galaxy S22): every capture is then two frames blended, the header mostly unreadable and
+	// no codeword decodes. At 2 ms the S22 went from nothing to 225 KB/s on average.
+	//
+	// The time is a sixteenth of the sender's frame, as in the apps, between 1 and 2.5 ms
+	// (2 ms until the sender's rate is known). The gain starts where the camera's own exposure
+	// would be as bright and then follows the picture: the brightest twentieth of the code is
+	// held near white. Three seconds after the code has left the view the camera has its own
+	// exposure back. ?exposure=off leaves it alone.
+	private expoCaps: any = null;
+	private expoOn = false;
+	private expoAt = 0;
+	private expoBusy = false;
+	private expoTime = 0;
+	private expoIso = 0;
+	private expoSettled = 0; // the gain, at 2 ms, that last gave a well-lit code
+	private async adaptExposure(now: number, senderFps: number) {
+		const track = this.track;
+		const caps = this.expoCaps;
+		if (!track || !caps || this.expoBusy || now - this.expoAt < 700) return;
+		if (this.params.get('exposure') === 'off') return;
+		const inView = now - this.lastLocatedAt < 3000;
+		if (!inView && !this.expoOn) return;
+		this.expoAt = now;
+		const set: Record<string, unknown> = {};
+		if (!inView) {
+			set.exposureMode = 'continuous';
+			this.expoOn = false;
+		} else {
+			const clamp = (v: number, c: { min: number; max: number }) =>
+				Math.min(c.max, Math.max(c.min, v));
+			// exposureTime is in units of 100 µs
+			const time = clamp(
+				senderFps > 0 ? Math.min(25, Math.max(10, 625 / senderFps)) : this.expoTime || 20,
+				caps.exposureTime
+			);
+			let iso = this.expoIso;
+			if (caps.iso) {
+				if (!this.expoOn) {
+					// Where to start: the gain this session last settled on, or 800 at 2 ms (a
+					// monitor in a room then reads at about half scale on the two phones
+					// measured). Not from the camera's own exposure: a camera that has once been
+					// set by hand goes on reporting that setting, not what it does, and a
+					// start worked out from it climbed with every return to the code.
+					iso = ((this.expoSettled || 800) * 20) / time;
+				} else {
+					// the code's box; the whole picture while its header cannot be read (there
+					// the brightest hundredth: the code may be a small part of it)
+					const seen = this.lastSeen;
+					let level = 0;
+					if (seen && now - seen.at < 1000) {
+						const xs = seen.corners.map((c) => c[0]);
+						const ys = seen.corners.map((c) => c[1]);
+						const [x0, y0] = [Math.max(0, Math.min(...xs)), Math.max(0, Math.min(...ys))];
+						const [bw, bh] = [Math.max(...xs) - x0, Math.max(...ys) - y0];
+						if (bw > 32 && bh > 32) level = this.brightness([x0, y0, bw, bh])?.p95 ?? 0;
+					} else level = this.brightness(null)?.p99 ?? 0;
+					// (in steps, and only when well off: a gain that hunts makes every capture
+					// a different picture)
+					if (level && (level < 150 || level > 225))
+						iso *= Math.min(1.6, Math.max(0.6, 190 / Math.max(level, 20)));
+					else if (level && seen && now - seen.at < 1000) this.expoSettled = (iso * time) / 20;
+					// (without the code's box the picture may be mostly the room: no more than
+					// twice the gain the code was last well lit with)
+					if (!(seen && now - seen.at < 1000))
+						iso = Math.min(iso, (2 * (this.expoSettled || 800) * 20) / this.expoTime);
+					iso *= this.expoTime / time;
+				}
+				iso = Math.round(clamp(iso, caps.iso));
+			}
+			if (this.expoOn && Math.abs(time - this.expoTime) < 1 && iso === this.expoIso) return;
+			set.exposureMode = 'manual';
+			set.exposureTime = time;
+			if (caps.iso) set.iso = iso;
+			this.expoOn = true;
+			this.expoTime = time;
+			this.expoIso = iso;
+		}
+		this.expoBusy = true;
+		try {
+			await track.applyConstraints({ advanced: [set as any] });
+		} catch {
+			this.expoCaps = null; // refused: the camera keeps its own exposure
+			this.expoOn = false;
+		}
+		this.expoBusy = false;
+	}
+
 	private setupTrackControls() {
 		const track = this.track!;
 		const caps: any = track.getCapabilities ? track.getCapabilities() : {};
+		const manual = mayHoldExposure(caps, navigator.vendor);
+		this.expoCaps = manual ? caps : null;
+		this.expoOn = false;
+		// (some cameras keep a manual exposure from the last time they were open)
+		if (manual && (track.getSettings() as any).exposureMode !== 'continuous')
+			track.applyConstraints({ advanced: [{ exposureMode: 'continuous' } as any] }).catch(() => {});
 		if (caps.focusMode && caps.focusMode.includes('continuous')) {
 			track.applyConstraints({ advanced: [{ focusMode: 'continuous' } as any] }).catch(() => {});
 		}
@@ -717,6 +936,9 @@ export class ReceiveController {
 	// start a second one: each would count the camera's frames and ask for scans.
 	private pumpQueued = false;
 	private lastSeen: { at: number; corners: number[][]; cellPx: number } | null = null;
+	private lastLocatedAt = -1e9;
+	private located: number[] = [];
+	private lastHeaderAt = -1e9;
 	private kick() {
 		if (!this.pumpQueued) this.pump();
 	}
@@ -739,8 +961,12 @@ export class ReceiveController {
 		// already in view locks at once
 		if (now - this.startedAt < 3000) return true;
 		// searching: 5 scans/s, and 2/s once nothing has been in view for 10 s (phone put down)
-		if (now - this.lastFoundAt > 10000) return now - this.lastDispatch >= 1000 / 2;
-		if (now - this.lastFoundAt > 2000) return now - this.lastDispatch >= 1000 / 5;
+		// (where the page sets the exposure, a code located with its header unreadable counts
+		// as in view: it is what a code looks like before the exposure is short, and scanning
+		// must not slow down in front of it)
+		const seen = this.expoCaps ? Math.max(this.lastFoundAt, this.lastHeaderAt) : this.lastFoundAt;
+		if (now - seen > 10000) return now - this.lastDispatch >= 1000 / 2;
+		if (now - seen > 2000) return now - this.lastDispatch >= 1000 / 5;
 		return true;
 	}
 
@@ -848,7 +1074,14 @@ export class ReceiveController {
 						fullH: sh
 					};
 					w.postMessage(
-						{ id, yuv: { data: buf, format: fmt, layout }, region: part, skip, engine, hint },
+						{
+							id,
+							yuv: { data: buf, format: fmt, layout, chroma: this.chroma },
+							region: part,
+							skip,
+							engine,
+							hint
+						},
 						[buf.buffer]
 					);
 					return;
@@ -919,6 +1152,15 @@ export class ReceiveController {
 		if (d.ok && d.stats)
 			this.lastSeen = { at: capturedAt, corners: d.stats.corners, cellPx: d.stats.cellPx };
 		else if (import.meta.env.DEV) this.reasons[d.reason] = (this.reasons[d.reason] ?? 0) + 1;
+		// A code whose header cannot be read is a code all the same: so it looks when the
+		// exposure blends two frames. One such scan may be a chance pattern in the room (and the
+		// exposure must not go short and back for it): six within a second are a code.
+		if (d.ok || d.reason === 'header') {
+			this.lastHeaderAt = now;
+			this.located.push(now);
+			while (now - this.located[0] > 1000) this.located.shift();
+			if (d.ok || this.located.length >= 6) this.lastLocatedAt = now;
+		}
 		if (d.prepMs !== undefined) {
 			s.prepSum += d.prepMs;
 			s.pxSum += d.px || 0;
@@ -1122,6 +1364,7 @@ export class ReceiveController {
 		if (senderFps > 0) this.senderFpsEst = senderFps;
 		if (senderFps > 0 && !this.stillImage)
 			void this.adaptCameraRate(senderFps, now, okRate, recent.length);
+		if (!this.stillImage) void this.adaptExposure(now, senderFps);
 		const distinctFps = dt > 0.5 ? (recent.length - 1) / dt : 0;
 		// share of the sender's frames that were captured; with a fountain code a missed frame
 		// costs only its own data, nothing has to be resent
@@ -1160,12 +1403,36 @@ export class ReceiveController {
 				.replace('{size}', fmtBytes(Math.max(progress.size, progress.payloadLength)))
 				.replace('{max}', fmtBytes(MAX_SIZE));
 		else if (!found) msg = t('tipSearch');
-		else if (cellN && (cell < 3.4 ? !moving : cell < 3.9 && okRate < 0.2)) {
-			// (under 4 pixels a cell hardly anything decodes, whatever else is right: measured
-			// in Safari, 0–3 % at 3.5–3.8 pixels where 4.1 gave 45 %)
+		else if (
+			cellN &&
+			(cell < 3.4
+				? !moving
+				: (cell < 3.9 && okRate < 0.2) ||
+					(cell < 6.5 && covTot && okSlow < 0.08 && captured > 0.5 && dt > 2))
+		) {
+			// Under 4 pixels a cell hardly anything decodes, whatever else is right (measured in
+			// Safari: 0–3 % at 3.5–3.8 pixels where 4.1 gave 45 %), and some cameras need more:
+			// Chrome on a Redmi K40 gets every frame of a code with 4-pixel cells and no
+			// codeword, its colours a third as strong as a Galaxy S22's (1 % at 5.4 pixels, half
+			// at 7). When the code already fills the picture, closer is no advice: the sender
+			// has to make the cells larger.
 			const h = this.lastResult && this.lastResult.header;
 			const portrait = this.video.videoHeight > this.video.videoWidth;
-			msg = h && h.X > h.Y * 1.2 && portrait ? t('tipLandscape') : t('tipCloser');
+			const seen = this.lastSeen;
+			const xs = seen ? seen.corners.map((c) => c[0]) : [];
+			const ys = seen ? seen.corners.map((c) => c[1]) : [];
+			const fills =
+				seen &&
+				Math.max(
+					(Math.max(...xs) - Math.min(...xs)) / this.video.videoWidth,
+					(Math.max(...ys) - Math.min(...ys)) / this.video.videoHeight
+				) > 0.85;
+			msg =
+				h && h.X > h.Y * 1.2 && portrait
+					? t('tipLandscape')
+					: fills
+						? t('tipSparser')
+						: t('tipCloser');
 		} else if (!moving && covTot && okRate < 0.5) msg = cell < 4.5 ? t('tipSteady') : t('tipColor');
 		else if (this.engine === 'js' && senderFps && captured < 0.8 && load > 0.8) msg = t('tipWasm');
 		else if (
@@ -1180,7 +1447,7 @@ export class ReceiveController {
 			good = true;
 		} else if (
 			slower &&
-			senderFps > 1.15 * slower &&
+			senderFps > 1.3 * slower &&
 			dt > 2 &&
 			covTot &&
 			okSlow < (0.9 * slower) / senderFps
@@ -1188,9 +1455,11 @@ export class ReceiveController {
 			msg = t('tipFpsDown')
 				.replace('{cam}', String(Math.round(camRate)))
 				.replace('{n}', String(slower));
-		} else if (moving && dt > 2 && captured > 0.9 && okSlow > 0.6 && cellN && cell >= 5.5) {
-			// It arrives and the cells are larger than the camera needs: with the frame rate
-			// at what the camera can follow, more data per frame is the way up
+		} else if (moving && dt > 2 && captured > 0.9 && okSlow > 0.6 && cellN && cell >= 8) {
+			// It arrives and the cells are much larger than cameras need: with the frame rate at
+			// what the camera can follow, more data per frame is the way up. From 8 pixels only:
+			// what a camera needs differs (an iPhone 15 Pro or a Galaxy S22 reads cells of 3.5
+			// pixels, a Redmi K40 reads 7 and next to nothing at 5.4)
 			msg = t('tipDenser').replace('{px}', cell.toFixed(1));
 			good = true;
 		} else {

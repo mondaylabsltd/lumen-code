@@ -41,6 +41,9 @@ const uint8_t *lm_scan_camera(WScanner *h, const uint8_t *rgba, uint32_t width, 
 const uint8_t *lm_scan_yuv(WScanner *h, const uint8_t *y, const uint8_t *cbcr, uint32_t width,
                            uint32_t height, const uint32_t *skip, uint32_t skip_len);
 void lm_scanner_hint(WScanner *h, const double *corners, double module);
+/* Chroma siting of the planes given to lm_scan_yuv: 1 = level with the even luma columns
+ * (video's convention), 0 = centred on their four luma pixels (the default). */
+void lm_scanner_chroma(WScanner *h, uint32_t left);
 
 /* ---- sender: prepared payload -> frames (cell values) ---- */
 WSender *lm_sender_new(const uint8_t *payload, uint32_t len, const uint8_t *name, uint32_t name_len,

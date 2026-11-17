@@ -269,7 +269,7 @@ class AppModel(private val activity: MainActivity) {
         // the code's position steers the camera's metering and focus
         if (v.recv.cameraOn) {
             val o = v.recv.overlay
-            camera.track(o?.points, o?.frameW ?: 0, o?.frameH ?: 0)
+            camera.track(o?.points, o?.frameW ?: 0, o?.frameH ?: 0, o?.tone == "good")
         }
     }
 

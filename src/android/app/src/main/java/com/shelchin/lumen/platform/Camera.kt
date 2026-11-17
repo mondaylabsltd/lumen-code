@@ -5,6 +5,9 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
+import android.hardware.display.DisplayManager
+import android.os.Handler
+import android.os.Looper
 import android.util.Range
 import android.util.Size
 import androidx.activity.ComponentActivity
@@ -42,7 +45,6 @@ import uniffi.lumen_ffi.LumenCore
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -97,6 +99,27 @@ class LumenCamera(private val activity: ComponentActivity, private val core: Lum
     /** Where the code is in camera-frame pixels (x0, y0, x1, y1), while it is tracked. */
     @Volatile private var codeBox: FloatArray? = null
     private var focusedAt = 0L
+    /** The focus is held on the code (see track()). */
+    private var focusHeld = false
+    private var lostAt = 0L
+    private var poorSince = 0L
+
+    // The analysed frames say how far they are turned from the screen's orientation, and the
+    // outline is drawn by that. The activity is not rebuilt when the phone is turned, so the
+    // use case is told: left as bound, a phone on its side (auto-rotate on) had its outline
+    // drawn for an upright one, tall and narrow.
+    private val displays = activity.getSystemService(DisplayManager::class.java)
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(id: Int) {}
+        override fun onDisplayRemoved(id: Int) {}
+        override fun onDisplayChanged(id: Int) = turnWithDisplay()
+    }
+    private var listening = false
+
+    @Suppress("DEPRECATION")
+    private fun turnWithDisplay() {
+        analysis?.targetRotation = activity.windowManager.defaultDisplay.rotation
+    }
 
     // debug builds: what the camera does, for `watch`, and raw frames for `grab`
     @Volatile private var meta = ""
@@ -247,6 +270,12 @@ class LumenCamera(private val activity: ComponentActivity, private val core: Lum
             }
             camera = cam
             this.analysis = analysis
+            focusHeld = false
+            turnWithDisplay()
+            if (!listening) {
+                displays.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
+                listening = true
+            }
             mirrored = cam.cameraInfo.lensFacing == CameraSelector.LENS_FACING_FRONT
             prepareExposure(info, start)
             tune(cam.cameraInfo, cam)
@@ -276,9 +305,14 @@ class LumenCamera(private val activity: ComponentActivity, private val core: Lum
 
     fun stop() {
         provider?.unbindAll()
+        if (listening) {
+            displays.unregisterDisplayListener(displayListener)
+            listening = false
+        }
         camera = null
         analysis = null
         codeBox = null
+        focusHeld = false
         readout = 0f
         core.cameraReadout(0f)
     }
@@ -400,27 +434,43 @@ class LumenCamera(private val activity: ComponentActivity, private val core: Lum
     // ---------------------------------------------------------------- the code's position
 
     /**
-     * The code's corners in camera-frame pixels (null: not in view). Steers the metering and,
-     * when the code appears or every few seconds while it stays, focuses on it.
+     * The code's corners in camera-frame pixels (null: not in view) and whether it is being
+     * read well. Steers the metering, and the focus: set on the code when it appears and held
+     * there. A screen is flat and stays where it is, and every new focus run sweeps the lens
+     * through a blur (focusing again every three seconds, as this did, cost captures each time).
+     * It runs again only when the code has read badly for two seconds; a second after the code
+     * has left the view the camera has its continuous focus back, to find the next one.
      */
-    fun track(points: List<List<Float>>?, frameW: Int, frameH: Int) {
+    fun track(points: List<List<Float>>?, frameW: Int, frameH: Int, good: Boolean) {
+        val now = System.currentTimeMillis()
         if (points == null || points.size != 4) {
             codeBox = null
+            if (focusHeld) {
+                if (lostAt == 0L) lostAt = now
+                if (now - lostAt > 1000) {
+                    runCatching { camera?.cameraControl?.cancelFocusAndMetering() }
+                    focusHeld = false
+                    lostAt = 0L
+                }
+            }
             return
         }
+        lostAt = 0L
         val xs = points.map { it[0] }
         val ys = points.map { it[1] }
         val box = floatArrayOf(xs.min(), ys.min(), xs.max(), ys.max())
-        val appeared = codeBox == null
         codeBox = box
-        val now = System.currentTimeMillis()
-        if (!appeared && now - focusedAt < 3000) return
+        if (good) poorSince = 0L else if (poorSince == 0L) poorSince = now
+        val again = poorSince != 0L && now - poorSince > 2000 && now - focusedAt > 3000
+        if (focusHeld && !again) return
         val cam = camera ?: return
         val a = analysis ?: return
         focusedAt = now
+        focusHeld = true
+        poorSince = 0L
         val f = SurfaceOrientedMeteringPointFactory(frameW.toFloat(), frameH.toFloat(), a)
         val point = f.createPoint((box[0] + box[2]) / 2, (box[1] + box[3]) / 2, 0.25f)
-        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).setAutoCancelDuration(3500, TimeUnit.MILLISECONDS).build()
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).disableAutoCancel().build()
         runCatching { cam.cameraControl.startFocusAndMetering(action) }
     }
 

@@ -98,13 +98,19 @@ const report = {
 			body(req, (b) => {
 				if (reportFile) appendFileSync(reportFile, b.toString().replace(/\n/g, ' ') + '\n');
 				// the answer carries one command for the page, if the desk left one in
-				// <LUMEN_REPORT>.cmd: parameters as a query string (path=camera&grab=12, reload=1)
+				// <LUMEN_REPORT>.cmd: parameters as a query string (path=camera&grab=12, reload=1).
+				// With several phones reporting, <LUMEN_REPORT>.cmd.<label> goes to the page opened
+				// with ?report=<label> only.
 				let cmd = '';
-				try {
-					cmd = readFileSync(`${reportFile}.cmd`, 'utf8').trim();
-					rmSync(`${reportFile}.cmd`);
-				} catch {
-					// none
+				const label = /"label":"([\w-]+)"/.exec(b.toString())?.[1];
+				for (const file of [`${reportFile}.cmd.${label}`, `${reportFile}.cmd`]) {
+					try {
+						cmd = readFileSync(file, 'utf8').trim();
+						rmSync(file);
+						break;
+					} catch {
+						// none
+					}
 				}
 				res.statusCode = cmd ? 200 : 204;
 				res.end(cmd);

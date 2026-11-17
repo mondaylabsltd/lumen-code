@@ -422,9 +422,10 @@ fn recv_view(m: &Model) -> RecvView {
         // 120 Hz laptop screen to a camera at 120 gave 0.2–0.4 MB/s at 120 fps (9–42 %
         // decoded) and 0.77 MB/s at 60; a 60 Hz monitor to Safari at 30 gave 248 KB/s at
         // 30 fps (42 %) and 399 KB/s at 20 (80 %). An OLED phone at 30 fps to a camera at 30
-        // decoded 68 % on average: no gain from 20, and none is advised.
+        // decoded 68 % on average: no gain from 20, and none is advised. (Well faster, by 1.3:
+        // the sender's rate is an estimate, and in its first seconds it read 26 for a sender at 20.)
         let n = [120.0, 60.0, 30.0, 20.0, 15.0, 12.0, 10.0].into_iter().find(|&n| n <= 0.7 * s.cam_fps)?;
-        (s.sender_fps > 1.15 * n && ok_slow < (0.9 * n / s.sender_fps) as f64).then_some((s, n as u32))
+        (s.sender_fps > 1.3 * n && ok_slow < (0.9 * n / s.sender_fps) as f64).then_some((s, n as u32))
     }) {
         (t(l, "tipFpsDown").replace("{cam}", &format!("{:.0}", s.cam_fps)).replace("{n}", &n.to_string()), false)
     } else if let Some(s) = st.filter(|s| s.tearing && s.span_secs > 2.0 && s.cam_fps > 0.0 && s.sender_fps > 0.95 * s.cam_fps) {
@@ -439,10 +440,12 @@ fn recv_view(m: &Model) -> RecvView {
         let target = if s.tearing { 0.8 * s.cam_fps } else { s.cam_fps / 2.0 };
         let n = target.min(s.sender_fps * 1.5).round() as u32;
         (t(l, "tipFpsUp").replace("{n}", &n.to_string()), true)
-    } else if moving && st.is_some_and(|s| s.span_secs > 2.0 && s.captured > 0.9) && ok_slow > 0.6 && cell_n > 0 && cell >= 5.5 {
-        // It arrives and the cells are larger than the camera needs (4 pixels read as well as
-        // 6): with the frame rate at what the camera can follow, more data per frame is the way
-        // up
+    } else if moving && st.is_some_and(|s| s.span_secs > 2.0 && s.captured > 0.9) && ok_slow > 0.6 && cell_n > 0 && cell >= 8.0 {
+        // It arrives and the cells are much larger than cameras need: with the frame rate at
+        // what the camera can follow, more data per frame is the way up. From 8 pixels only:
+        // what a camera needs differs (an iPhone 15 Pro or a Galaxy S22 reads cells of 3.5
+        // pixels, a Redmi K40 reads 7 and next to nothing at 5.4), and advice that leads to a
+        // code the camera cannot read is worse than none.
         (t(l, "tipDenser").replace("{px}", &format!("{cell:.1}")), true)
     } else {
         (t(l, "tipGood").to_string(), true)

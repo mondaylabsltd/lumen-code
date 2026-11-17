@@ -108,11 +108,12 @@ fn camera_paths_bring_the_file_through() {
         }
         (y, cbcr)
     };
-    for path in ["rgba", "planes", "planes, cell by cell"] {
+    for path in ["rgba", "planes", "planes, cell by cell", "planes with chroma on the even columns, cell by cell"] {
         let mut tx = Sender::new(&prepared, 2, 1, 150, 90, 0x0abc, 3).unwrap();
         let mut rx = Receiver::new();
         let mut sc = Scanner::new();
-        sc.set_lean(path == "planes, cell by cell");
+        sc.set_lean(path.ends_with("cell by cell"));
+        sc.set_chroma_left(path.contains("even columns"));
         let mut hint = None;
         let mut done = false;
         for f in 0..80 {
@@ -130,7 +131,7 @@ fn camera_paths_bring_the_file_through() {
             let res = if path == "rgba" {
                 sc.scan_rgba_camera(&Image { width: cw, height: ch, rgba: &img }, None, hint)
             } else {
-                let (y, cbcr) = planes(&img, path != "planes");
+                let (y, cbcr) = planes(&img, path.contains("even columns"));
                 sc.scan_yuv(&YuvImage { width: cw, height: ch, y: &y, cbcr: &cbcr }, None, hint)
             };
             assert!(res.ok, "{path}: frame {f} not found: {}", res.reason);

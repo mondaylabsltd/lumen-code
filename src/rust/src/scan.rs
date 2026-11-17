@@ -288,6 +288,7 @@ pub struct Scanner {
     /// Whether camera planes are read cell by cell ([`Lean`]) rather than smoothed whole:
     /// None = as suits the target (cell by cell in WebAssembly).
     lean: Option<bool>,
+    chroma_left: bool,
 }
 
 /// What the camera path keeps of a code from one capture to the next. A code on a screen
@@ -370,6 +371,7 @@ struct Ctx<'a> {
     layout_cache: &'a std::cell::RefCell<Option<std::sync::Arc<Grid>>>,
     hint: Option<Hint>,
     lean: bool,
+    chroma_left: bool,
     /// Whether `thr` covers the whole image (else only the hint windows).
     thr_full: bool,
 }
@@ -392,6 +394,14 @@ impl Scanner {
     /// plane smoothed whole. Left alone, each target takes its faster way.
     pub fn set_lean(&mut self, lean: bool) {
         self.lean = Some(lean);
+    }
+
+    /// Where the chroma samples of [`Scanner::scan_yuv`]'s planes lie, for the cell-by-cell
+    /// reader: level with the even luma columns (`true`; video's convention, what Safari
+    /// gives) or centred on their four luma pixels (the default; what Chrome on Android
+    /// gives, and how the plane reader takes it).
+    pub fn set_chroma_left(&mut self, left: bool) {
+        self.chroma_left = left;
     }
 
     /// [`Scanner::scan`] with a tracking hint (see [`Hint`]).
@@ -479,12 +489,13 @@ impl Scanner {
         let soft_bufs = std::mem::take(&mut self.soft);
         let soft = &soft_bufs;
         let lean = self.lean.unwrap_or(cfg!(target_arch = "wasm32"));
-        let mut ctx = Ctx { w, h, bs, bw, luma, soft, track: &self.track, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: regions.is_none(), lean };
+        let chroma_left = self.chroma_left;
+        let mut ctx = Ctx { w, h, bs, bw, luma, soft, track: &self.track, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: regions.is_none(), lean, chroma_left };
         let (mut res, mut tried_reuse) = ctx.run(skip, self.last_header);
         if res.reason == RETHRESHOLD {
             // the windows missed: the whole image after all
             self.thresholds(luma, w, h, bs, bw, bh, None);
-            ctx = Ctx { w, h, bs, bw, luma, soft, track: &self.track, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: true, lean };
+            ctx = Ctx { w, h, bs, bw, luma, soft, track: &self.track, thr: &self.thr[..nb], px, layout_cache: &self.layout, hint, thr_full: true, lean, chroma_left };
             (res, tried_reuse) = ctx.run(skip, self.last_header);
         }
         self.soft = soft_bufs;
@@ -1858,7 +1869,7 @@ impl<'a> Ctx<'a> {
             let mut cells = [vec![0f32; m], vec![0f32; m], vec![0f32; m]];
             let at = SampleAt { slot_x, slot_y, qi_of: &qi_of, qj_of: &qj_of, qh: &qh, nx, refs: &refs, fx_of: &fx_of, fy_of: &fy_of };
             match self.px {
-                Pixels::Yuv { cbcr, cw, ch } if self.lean => Lean { luma: self.luma, colour: Colour::Planes { cbcr, cw, ch }, w: self.w, h: self.h }.sample(cell_px, &slots, &at, &mut cells),
+                Pixels::Yuv { cbcr, cw, ch } if self.lean => Lean { luma: self.luma, colour: Colour::Planes { cbcr, cw, ch, left: self.chroma_left }, w: self.w, h: self.h }.sample(cell_px, &slots, &at, &mut cells),
                 Pixels::Yuv { cbcr, cw, ch } => {
                     let corners = [gpt(kk[TL]), gpt(kk[TR]), gpt(kk[BR]), gpt(kk[BL])];
                     let cam = Camera { luma: self.luma, w: self.w, h: self.h, cbcr, cw, ch };
@@ -2289,7 +2300,7 @@ struct Lean<'a> {
 #[derive(Clone, Copy)]
 enum Colour<'a> {
     Rgba(&'a [u8]),
-    Planes { cbcr: &'a [u8], cw: usize, ch: usize },
+    Planes { cbcr: &'a [u8], cw: usize, ch: usize, left: bool },
 }
 
 impl Lean<'_> {
@@ -2356,13 +2367,15 @@ impl Lean<'_> {
                     let (rm, gm, bm) = (tap(0), tap(1), tap(2));
                     (-0.168_736 * rm - 0.331_264 * gm + 0.5 * bm, 0.5 * rm - 0.418_688 * gm - 0.081_312 * bm)
                 }
-                Colour::Planes { cbcr, cw, ch } => {
-                    // Chroma sample (cx, cy) lies level with luma column 2cx and between rows 2cy
-                    // and 2cy + 1, as video has it (Camera::sample takes it centred both ways).
-                    // Measured on a frame from Safari on an iPhone 15 Pro, by where the tap is
-                    // taken along the row: a quarter of a chroma sample left of this 0
-                    // codewords of 121, centred 24, here 34, a quarter right 25.
-                    let x = ((px - 0.5) * 0.5).clamp(0.0, cw as f64 - 1.001);
+                Colour::Planes { cbcr, cw, ch, left } => {
+                    // Where chroma sample (cx, cy) lies among the luma pixels. Centred on its
+                    // four (2cx + 1, 2cy + 1), as Camera::sample takes it; or, `left`, level with
+                    // column 2cx and between the rows, as video has it. Cameras differ, and at
+                    // cells of 3 to 4 pixels a quarter of a chroma sample decides. Measured, by
+                    // codewords decoded: Safari on an iPhone 15 Pro (NV12) 24 of 121 centred, 34
+                    // left; Chrome on a Galaxy S22 (I420), three frames, 4 16 18 of 137 centred,
+                    // 0 3 3 left.
+                    let x = ((px - 0.5) * 0.5 - if left { 0.0 } else { 0.25 }).clamp(0.0, cw as f64 - 1.001);
                     let y = ((py - 0.5) * 0.5 - 0.25).clamp(0.0, ch as f64 - 1.001);
                     let (jx, jy) = (x as usize, y as usize);
                     let (bx, by) = ((x - jx as f64) as f32, (y - jy as f64) as f32);

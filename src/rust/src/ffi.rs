@@ -165,6 +165,14 @@ pub extern "C" fn lm_scan_yuv(h: *mut WScanner, y: *const u8, cbcr: *const u8, w
     s.out.as_ptr()
 }
 
+/// Where the chroma samples of the planes given to `lm_scan_yuv` lie: 1 = level with the even
+/// luma columns (video's convention; Safari's frames), 0 = centred on their four luma pixels
+/// (the default; Chrome's frames on Android). See `Scanner::set_chroma_left`.
+#[no_mangle]
+pub extern "C" fn lm_scanner_chroma(h: *mut WScanner, left: u32) {
+    unsafe { &mut *h }.sc.set_chroma_left(left != 0);
+}
+
 /// Where the code was a moment ago, for the next `lm_scan_camera` or `lm_scan_yuv` only: its four corners in
 /// that picture's pixels (x0, y0 … x3, y3, as a scan reports them) and the cell size. The
 /// finders are then looked for near those corners first.

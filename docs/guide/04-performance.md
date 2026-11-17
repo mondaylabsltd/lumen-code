@@ -150,7 +150,21 @@ How the web reads the picture now:
 - The four corners of the last scan go with the next frame, and the finders are looked for near them first.
 - Chroma siting: Safari's NV12 has its chroma level with the even luma columns (as video has it). Read as centred, three tenths fewer codewords decode (24 against 34 on one frame). The apps' camera path reads it as centred for now; to be checked on device captures.
 
-Chrome (Android included) has not been measured. Chrome on Android offers manual exposure, which Safari does not; it is not used yet.
+### Chrome on Android (measured 2026-11-17)
+
+Chrome 157 on a Galaxy S22, the same 60 Hz monitor, 8 colours, sender at 20 FPS, 3.5–3.9 pixels a cell in the capture:
+
+| | Average | Best | Decoded |
+|---|---|---|---|
+| The camera's own exposure (33 ms) | 0 | 0 | 0% |
+| Exposure held at 2.5 ms by the page | 225 KB/s | 362 KB/s | 43% |
+| and chroma read as centred | 295 KB/s | 376 KB/s | 59% |
+
+- **Exposure.** Facing a screen in a room, the camera exposes for a whole frame period (33 ms on the S22, 30 ms on a Redmi K40): every capture is two frames blended, most headers cannot be read and no codeword decodes. Chrome on Android lets a page set the exposure: once a code has been located six times within a second (an unreadable header counts), the exposure is held at a sixteenth of the sender's frame (1–2.5 ms); the gain starts at ISO 800 and follows the brightness of the code's area; three seconds after the code has left the view the camera has its exposure back. WebKit is left out by name (`src/website/src/lib/recv/exposure.ts`): receiving on an iPhone was tuned without this, and should Safari offer it one day it is to be measured before it is used.
+- **Chroma siting.** Chrome gives I420 with chroma centred on its four luma pixels; Safari's NV12 has it level with the even columns. Read the wrong way, three frames from the S22 decode 0, 3 and 3 codewords; read the right way 4, 16 and 18 (of 137).
+- **1080p only.** Chrome on both phones opens the camera at 1920 × 1080 and at no larger size it lists. A code with many columns on a large screen therefore has to fill the picture, and the phone has to be close; only a lower density at the sender changes that.
+- **Zoom does not help.** The interface is there and the luma detail is real, but the cropped picture lacks colour resolution: at 2× zoom, cells of 3.8 pixels decode 2, 0 and 3 codewords, where cells of 3.07 pixels decode 4, 16 and 18 without zoom.
+- **A Redmi K40 needs larger cells**: the chroma of its camera stream has about two fifths of the S22's amplitude, whatever the exposure (the camera's own, held short, bright, dark). With cells of 3.5–4 pixels nothing decodes, at 5.4 pixels 1%, at 7 pixels (density Low at the sender) half on average and 90% at best, 78 KB/s on average. When a code fills the picture, its frames are captured and next to nothing decodes, the receiver advises a lower density at the sender.
 
 ## 4.6 Measured cost of each stage
 

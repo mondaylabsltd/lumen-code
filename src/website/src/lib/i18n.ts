@@ -70,6 +70,7 @@ export const DICT = {
 		okM: '成功率',
 		tipSearch: '把彩色码完整放进画面',
 		tipCloser: '再靠近一点，或在发送端降低密度',
+		tipSparser: '这台相机分不清这么小的颜色格：请在发送端降低密度',
 		tipSteady: '保持稳定，避免反光',
 		tipColor: '颜色识别困难：试试发送端「颜色 4」或降低密度',
 		tipGood: '识别良好',
@@ -191,6 +192,8 @@ export const DICT = {
 		okM: 'Success',
 		tipSearch: 'Fit the whole code in view',
 		tipCloser: 'Move closer, or lower the density on the sender',
+		tipSparser:
+			'This camera cannot tell colours in cells this small: lower the density on the sender',
 		tipSteady: 'Hold steady and avoid glare',
 		tipColor: 'Colours are hard to read: try 4 colours or lower density on the sender',
 		tipGood: 'Reading well',
