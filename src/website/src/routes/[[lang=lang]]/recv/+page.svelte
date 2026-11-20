@@ -10,6 +10,7 @@
 		HIGHLIGHT_LIMIT,
 		LINKIFY_LIMIT
 	} from '#lib/recv/receiver.svelte';
+	import { gravitySign, motionUnasked, quarterFrom } from '#lib/recv/tilt';
 	import HomeLink from '#lib/ui/HomeLink.svelte';
 	import BuildLink from '#lib/ui/BuildLink.svelte';
 	import Seo from '#lib/ui/Seo.svelte';
@@ -26,6 +27,49 @@
 	let stage = $state<HTMLDivElement>();
 	let preview = $state<HTMLDivElement>();
 	let hudH = $state(0); // the bottom panel's height: the framing guides end above it
+	// How the phone is held while the page itself is upright (see lib/recv/tilt.ts): the
+	// status and the panel turn by this many quarters.
+	// From gravity where the browser reports it: unasked on Android, on an iPhone once the
+	// person has allowed it (askMotion). Until then, or refused, from the code in the picture.
+	let tilt = $state(0);
+	let byCode = $state(false);
+	let gSign = 0; // 0: not listening
+	function onMotion(e: DeviceMotionEvent) {
+		const g = e.accelerationIncludingGravity;
+		// only for a page that has not turned with the browser: one that has needs nothing added
+		const angle = screen.orientation?.angle;
+		const unturned = angle === undefined ? window.innerHeight >= window.innerWidth : angle === 0;
+		const held = g && g.x !== null && g.y !== null;
+		tilt =
+			held && unturned && rx?.phase === 'scanning'
+				? quarterFrom((gSign * g.x!) / 9.81, (gSign * g.y!) / 9.81, tilt)
+				: 0;
+		if (import.meta.env.DEV && rx && held) rx.tiltNote = `g ${g.x!.toFixed(1)} ${g.y!.toFixed(1)}`;
+	}
+	function listenMotion() {
+		if (gSign) return;
+		gSign = gravitySign(navigator.vendor);
+		byCode = false;
+		window.addEventListener('devicemotion', onMotion);
+	}
+	// Safari reports motion only once the person has allowed it, and asks only from a tap:
+	// asked with the camera, on a phone. Refused, the code in the picture is what is left.
+	async function askMotion() {
+		const Motion = window.DeviceMotionEvent as unknown as
+			{ requestPermission?: () => Promise<string> } | undefined;
+		if (gSign || motionUnasked(navigator.vendor) || !matchMedia('(pointer: coarse)').matches)
+			return;
+		if (typeof Motion?.requestPermission !== 'function') return;
+		try {
+			if ((await Motion.requestPermission()) === 'granted') listenMotion();
+		} catch {
+			/* not from a tap, or not offered: the code in the picture says it */
+		}
+	}
+	const quarter = $derived(byCode ? (rx?.phase === 'scanning' ? rx.codeQuarter : 0) : tilt);
+	$effect(() => {
+		if (rx) rx.quarter = quarter;
+	});
 	// the engine, cell size, success rate and diagnostics: folded away unless asked for
 	let details = $state(false);
 	const DETAILS_KEY = 'lumen.recv.details';
@@ -63,8 +107,13 @@
 		document.addEventListener('visibilitychange', onVisible);
 		window.addEventListener('resize', onResize);
 		const off = gestures(stage!, c);
+		// (Safari reports motion only after asking: see askMotion)
+		if ('DeviceMotionEvent' in window && motionUnasked(navigator.vendor)) listenMotion();
+		else byCode = matchMedia('(pointer: coarse)').matches;
 		return () => {
 			off();
+			if (gSign) window.removeEventListener('devicemotion', onMotion);
+			gSign = 0;
 			document.removeEventListener('visibilitychange', onVisible);
 			window.removeEventListener('resize', onResize);
 			c.destroy();
@@ -266,144 +315,148 @@
 	<video id="video" playsinline muted autoplay bind:this={video}></video>
 	<canvas id="overlay" bind:this={overlay}></canvas>
 
-	<!-- where to put the code: shown until a code is found, then the detected outline takes over -->
-	<div
-		class="guides"
-		class:off={!rx || rx.phase !== 'scanning' || rx.found}
-		id="guides"
-		aria-hidden="true"
-	>
-		<i></i><i></i><i></i><i></i>
-	</div>
-
-	<div class="topbar">
-		<HomeLink href={path(lang, '')} title={t('home')} />
-		<span class="chip" class:hidden={!rx || rx.phase === 'start'} id="statusChip"
-			><span class="dot" class:live={rx?.found} id="statusDot"></span><b id="statusText"
-				>{rx?.found ? t('receiving') : t('waiting')}</b
-			></span
+	<!-- the status, the frame and the panel: they turn together when the phone is on its side
+	     and the page is not (see lib/recv/tilt.ts) -->
+	<div class="turn" class:side={quarter !== 0} style:--turn="{quarter * 90}deg">
+		<!-- where to put the code: shown until a code is found, then the detected outline takes over -->
+		<div
+			class="guides"
+			class:off={!rx || rx.phase !== 'scanning' || rx.found}
+			id="guides"
+			aria-hidden="true"
 		>
-		<span class="spacer"></span>
-	</div>
-
-	<div
-		class="recv-dock"
-		class:hidden={rx?.phase === 'start' || !rx}
-		bind:clientHeight={hudH}
-		id="recvDock"
-	>
-		<!-- camera tools sit above the panel, at the edge of the image, never over its middle -->
-		<div class="cam-tools">
-			<!-- (the zoom level shows once zoomed in, as the way back: at 1× it says nothing) -->
-			<button
-				class="zoom-chip"
-				class:hidden={!rx?.zoom || !(rx.zoomLevel > rx.zoom.min + 0.05)}
-				class:active={!!rx?.zoom && rx.zoomLevel > rx.zoom.min + 0.05}
-				id="zoomChip"
-				title={t('zoomHint')}
-				onclick={() => rx?.zoom && rx.setZoom(rx.zoom.min)}
-				><b class="num" id="zoomVal">{(rx?.zoomLevel || 1).toFixed(1)}×</b></button
-			>
-			<button
-				class="btn icon"
-				id="coverBtn"
-				title={t('cover')}
-				aria-label={t('cover')}
-				aria-pressed={rx?.cover ?? true}
-				onclick={() => rx?.toggleCover()}
-			>
-				<svg
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="1.8"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					aria-hidden="true"
-				>
-					{#if rx?.cover ?? true}
-						<path
-							d="M10.6 5.6a9.7 9.7 0 0 1 1.4-.1c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.6 3.4M6.5 7.3A15.6 15.6 0 0 0 2.5 12s3.5 6.5 9.5 6.5a9.6 9.6 0 0 0 4.4-1.1"
-						/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /><path d="M4 4l16 16" />
-					{:else}
-						<path
-							d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z"
-						/><circle cx="12" cy="12" r="3" />
-					{/if}
-				</svg>
-			</button>
-			<button
-				class="btn icon"
-				class:hidden={!rx?.multiCam}
-				id="switchCam"
-				title={t('openCam')}
-				aria-label={t('openCam')}
-				onclick={() => rx?.switchCamera()}
-			>
-				<svg
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="1.8"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					aria-hidden="true"
-					><path
-						d="M4 8.5A2.5 2.5 0 0 1 6.5 6H8l1.5-2h5L16 6h1.5A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5Z"
-					/><path d="M9 12.5a3 3 0 0 1 5.2-2M15 12a3 3 0 0 1-5.2 2" /><path
-						d="M14.5 8.8 14.2 10.6 16 10.4M9.5 15.2l.3-1.8-1.8.2"
-					/></svg
-				>
-			</button>
+			<i></i><i></i><i></i><i></i>
 		</div>
 
-		<div class="recv-bottom panel" id="hud">
-			<div class="recv-title">
-				<span class="name" id="rxName">{rx?.rxName ?? t('noData')}</span>
-				<span class="pct" id="rxPct">{Math.floor(rx?.pct ?? 0)}%</span>
-			</div>
-			<div class="progress"><div id="rxBar" style:width="{rx?.pct ?? 0}%"></div></div>
-			<div class="rate-row">
-				<span class="rate" id="mSpeed">{rateLine}</span>
+		<div class="topbar">
+			<HomeLink href={path(lang, '')} title={t('home')} />
+			<span class="chip" class:hidden={!rx || rx.phase === 'start'} id="statusChip"
+				><span class="dot" class:live={rx?.found} id="statusDot"></span><b id="statusText"
+					>{rx?.found ? t('receiving') : t('waiting')}</b
+				></span
+			>
+			<span class="spacer"></span>
+		</div>
+
+		<div
+			class="recv-dock"
+			class:hidden={rx?.phase === 'start' || !rx}
+			bind:clientHeight={hudH}
+			id="recvDock"
+		>
+			<!-- camera tools sit above the panel, at the edge of the image, never over its middle -->
+			<div class="cam-tools">
+				<!-- (the zoom level shows once zoomed in, as the way back: at 1× it says nothing) -->
 				<button
-					class="more-btn"
-					id="detailsBtn"
-					aria-expanded={details}
-					aria-controls="recvDetails"
-					onclick={toggleDetails}
-					><span>{t('details')}</span><svg
+					class="zoom-chip"
+					class:hidden={!rx?.zoom || !(rx.zoomLevel > rx.zoom.min + 0.05)}
+					class:active={!!rx?.zoom && rx.zoomLevel > rx.zoom.min + 0.05}
+					id="zoomChip"
+					title={t('zoomHint')}
+					onclick={() => rx?.zoom && rx.setZoom(rx.zoom.min)}
+					><b class="num" id="zoomVal">{(rx?.zoomLevel || 1).toFixed(1)}×</b></button
+				>
+				<button
+					class="btn icon"
+					id="coverBtn"
+					title={t('cover')}
+					aria-label={t('cover')}
+					aria-pressed={rx?.cover ?? true}
+					onclick={() => rx?.toggleCover()}
+				>
+					<svg
 						viewBox="0 0 24 24"
 						fill="none"
 						stroke="currentColor"
-						stroke-width="2"
+						stroke-width="1.8"
 						stroke-linecap="round"
 						stroke-linejoin="round"
-						aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg
-					></button
+						aria-hidden="true"
+					>
+						{#if rx?.cover ?? true}
+							<path
+								d="M10.6 5.6a9.7 9.7 0 0 1 1.4-.1c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.6 3.4M6.5 7.3A15.6 15.6 0 0 0 2.5 12s3.5 6.5 9.5 6.5a9.6 9.6 0 0 0 4.4-1.1"
+							/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /><path d="M4 4l16 16" />
+						{:else}
+							<path
+								d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z"
+							/><circle cx="12" cy="12" r="3" />
+						{/if}
+					</svg>
+				</button>
+				<button
+					class="btn icon"
+					class:hidden={!rx?.multiCam}
+					id="switchCam"
+					title={t('openCam')}
+					aria-label={t('openCam')}
+					onclick={() => rx?.switchCamera()}
 				>
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.8"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						aria-hidden="true"
+						><path
+							d="M4 8.5A2.5 2.5 0 0 1 6.5 6H8l1.5-2h5L16 6h1.5A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5Z"
+						/><path d="M9 12.5a3 3 0 0 1 5.2-2M15 12a3 3 0 0 1-5.2 2" /><path
+							d="M14.5 8.8 14.2 10.6 16 10.4M9.5 15.2l.3-1.8-1.8.2"
+						/></svg
+					>
+				</button>
 			</div>
-			<div class="tip" class:ok={rx?.tipGood} id="tip">{rx?.tip ?? ''}</div>
-			{#if details}
-				<div class="recv-details" id="recvDetails">
-					<div class="row">
-						<span>{t('engine')}</span>
-						<div class="seg" id="segEngine">
-							{#each ['js', 'wasm'] as const as e (e)}
-								<button
-									data-v={e}
-									aria-pressed={(rx?.engine ?? 'wasm') === e}
-									onclick={() => rx?.setEngine(e)}>{e.toUpperCase()}</button
-								>
-							{/each}
-						</div>
-					</div>
-					<div class="row">
-						<span>{t('cellM')} <b id="mCell">{rx?.mCell ?? '–'}</b></span>
-						<span>{t('okM')} <b id="mOk">{rx?.mOk ?? '–'}</b></span>
-					</div>
-					<div class="diag num" id="diag">{rx?.diag ?? ''}</div>
+
+			<div class="recv-bottom panel" id="hud">
+				<div class="recv-title">
+					<span class="name" id="rxName">{rx?.rxName ?? t('noData')}</span>
+					<span class="pct" id="rxPct">{Math.floor(rx?.pct ?? 0)}%</span>
 				</div>
-			{/if}
+				<div class="progress"><div id="rxBar" style:width="{rx?.pct ?? 0}%"></div></div>
+				<div class="rate-row">
+					<span class="rate" id="mSpeed">{rateLine}</span>
+					<button
+						class="more-btn"
+						id="detailsBtn"
+						aria-expanded={details}
+						aria-controls="recvDetails"
+						onclick={toggleDetails}
+						><span>{t('details')}</span><svg
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg
+						></button
+					>
+				</div>
+				<div class="tip" class:ok={rx?.tipGood} id="tip">{rx?.tip ?? ''}</div>
+				{#if details}
+					<div class="recv-details" id="recvDetails">
+						<div class="row">
+							<span>{t('engine')}</span>
+							<div class="seg" id="segEngine">
+								{#each ['js', 'wasm'] as const as e (e)}
+									<button
+										data-v={e}
+										aria-pressed={(rx?.engine ?? 'wasm') === e}
+										onclick={() => rx?.setEngine(e)}>{e.toUpperCase()}</button
+									>
+								{/each}
+							</div>
+						</div>
+						<div class="row">
+							<span>{t('cellM')} <b id="mCell">{rx?.mCell ?? '–'}</b></span>
+							<span>{t('okM')} <b id="mOk">{rx?.mOk ?? '–'}</b></span>
+						</div>
+						<div class="diag num" id="diag">{rx?.diag ?? ''}</div>
+					</div>
+				{/if}
+			</div>
 		</div>
 	</div>
 
@@ -429,8 +482,13 @@
 				<div class="entry-body">
 					<div class="entry-flow">
 						<div class="err" id="startErr">{rx?.startErr ?? ''}</div>
-						<button class="btn primary entry-action" id="startBtn" onclick={() => rx?.openCamera()}
-							>{t('openCam')}</button
+						<button
+							class="btn primary entry-action"
+							id="startBtn"
+							onclick={async () => {
+								await askMotion();
+								rx?.openCamera();
+							}}>{t('openCam')}</button
 						>
 					</div>
 				</div>
@@ -481,7 +539,14 @@
 							>{t('open')}</a
 						>
 					</div>
-					<button class="btn quiet" id="againBtn" onclick={() => rx?.again()}>{t('again')}</button>
+					<button
+						class="btn quiet"
+						id="againBtn"
+						onclick={async () => {
+							await askMotion();
+							rx?.again();
+						}}>{t('again')}</button
+					>
 				</div>
 				<button
 					class="disclose"
@@ -668,7 +733,14 @@
 							>{t('open')}</a
 						>
 					{/if}
-					<button class="btn" id="againBtn" onclick={() => rx?.again()}>{t('again')}</button>
+					<button
+						class="btn"
+						id="againBtn"
+						onclick={async () => {
+							await askMotion();
+							rx?.again();
+						}}>{t('again')}</button
+					>
 				</div>
 			</div>
 		</div>

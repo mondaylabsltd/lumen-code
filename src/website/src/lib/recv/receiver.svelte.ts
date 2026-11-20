@@ -7,6 +7,7 @@ import { buildText } from '#lib/build';
 import { isJson, formatJson, safeName } from '#lib/text-view';
 import { chromaSiting, mayHoldExposure } from './exposure';
 import { mainCameras, type Facing, type MainCameras } from './cameras';
+import { quarterOfCode } from './tilt';
 
 // phones: 2 decode workers is plenty once scanning is paced; more just burns battery
 const FRAME_KEY_MS = 1000; // a frame key names a frame for 1 s (PROTOCOL §11.5)
@@ -328,6 +329,15 @@ export class ReceiveController {
 			bitmap: this.useBitmap,
 			path: this.exactPath() ? 'exact' : this.useFrames ? `planes ${this.chroma}` : 'camera',
 			note: this.camNote,
+			turn: `${this.quarter} code ${this.codeQuarter} ${this.tiltNote}`,
+			box: (() => {
+				const q = (sel: string) => {
+					const r = document.querySelector(sel)?.getBoundingClientRect();
+					return r ? [r.left, r.top, r.width, r.height].map(Math.round).join(' ') : '-';
+				};
+				const vv = window.visualViewport;
+				return `win ${window.innerWidth}x${window.innerHeight} vv ${Math.round(vv?.width ?? 0)}x${Math.round(vv?.height ?? 0)} stage ${q('#stage')} turn ${q('.turn')} dock ${q('#recvDock')} tools ${q('.cam-tools')} top ${q('.topbar')} angle ${screen.orientation?.angle}`;
+			})(),
 			camera: track?.label
 		};
 		// what the camera is set to, and how bright the picture is (a small copy of it)
@@ -1217,9 +1227,15 @@ export class ReceiveController {
 		const now = performance.now();
 		const s = this.session;
 		this.lastResult = d;
-		if (d.ok && d.stats)
+		if (d.ok && d.stats) {
 			this.lastSeen = { at: capturedAt, corners: d.stats.corners, cellPx: d.stats.cellPx };
-		else if (import.meta.env.DEV) this.reasons[d.reason] = (this.reasons[d.reason] ?? 0) + 1;
+			// (a turn that has held for 0.4 s: one odd frame turns nothing)
+			const want = this.stillImage ? 0 : quarterOfCode(d.stats.corners, this.codeQuarter);
+			if (want !== this.turnWant) {
+				this.turnWant = want;
+				this.turnSince = now;
+			} else if (want !== this.codeQuarter && now - this.turnSince > 400) this.codeQuarter = want;
+		} else if (import.meta.env.DEV) this.reasons[d.reason] = (this.reasons[d.reason] ?? 0) + 1;
 		// A code whose header cannot be read is a code all the same: so it looks when the
 		// exposure blends two frames. One such scan may be a chance pattern in the room (and the
 		// exposure must not go short and back for it): six within a second are a code.
@@ -1346,6 +1362,17 @@ export class ReceiveController {
 	// progress on it. It thins when the code reads badly and goes when it does not read or is
 	// out of view: then the picture is what shows the trouble (a reflection, a code half out
 	// of the frame). On at first; the eye button switches it off.
+	/** How the phone is held, in quarter turns (set by the page; see tilt.ts). */
+	quarter = 0;
+	/**
+	 * The same as the code in the picture shows it, for a page that has nothing better to go
+	 * by. Back to upright once no code has been seen for 3 s.
+	 */
+	codeQuarter = $state(0);
+	/** (dev) the gravity the page last read */
+	tiltNote = '';
+	private turnWant = 0;
+	private turnSince = 0;
 	private coverAlpha = 0;
 	private coverPts: number[][] | null = null;
 	private coverAt = -1e9;
@@ -1438,7 +1465,12 @@ export class ReceiveController {
 				octx.font = `600 ${size}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
 				octx.textAlign = 'center';
 				octx.textBaseline = 'middle';
-				octx.fillText(`${Math.floor(this.pct)}%`, cx, cy);
+				// (upright for the person: turned with the panel when the phone is on its side)
+				octx.save();
+				octx.translate(cx, cy);
+				octx.rotate((this.quarter * Math.PI) / 2);
+				octx.fillText(`${Math.floor(this.pct)}%`, 0, 0);
+				octx.restore();
 			}
 		}
 		if (!seen) return;
@@ -1465,6 +1497,7 @@ export class ReceiveController {
 	updateHud() {
 		const t = this.t;
 		const now = performance.now();
+		if (this.codeQuarter && (!this.lastSeen || now - this.lastSeen.at > 3000)) this.codeQuarter = 0;
 		const found = now - this.lastFoundAt < 700;
 		const moving = this.moving();
 		this.found = found;
@@ -1579,7 +1612,8 @@ export class ReceiveController {
 			// at 7). When the code already fills the picture, closer is no advice: the sender
 			// has to make the cells larger.
 			const h = this.lastResult && this.lastResult.header;
-			const portrait = this.video.videoHeight > this.video.videoWidth;
+			// (a page held upright keeps a tall picture when the phone is on its side: see quarter)
+			const portrait = this.video.videoHeight > this.video.videoWidth && this.quarter === 0;
 			const seen = this.lastSeen;
 			const xs = seen ? seen.corners.map((c) => c[0]) : [];
 			const ys = seen ? seen.corners.map((c) => c[1]) : [];

@@ -722,6 +722,28 @@ input[type='range'] {
 	border-width: 0 3px 3px 0;
 	border-bottom-right-radius: 10px;
 }
+/* The layer of the status, the frame and the panel. Upright it is the stage; with the phone
+   on its side and the page upright it is turned a quarter, as wide as the stage is high. */
+.turn {
+	position: absolute;
+	inset: 0;
+	z-index: 9; /* its top bar stays above the start screen */
+	pointer-events: none;
+	container: scan / size;
+}
+.turn.side {
+	inset: auto;
+	left: 50%;
+	top: 50%;
+	width: 100vh;
+	width: 100dvh;
+	height: 100vw;
+	height: 100dvw;
+	transform: translate(-50%, -50%) rotate(var(--turn, 0deg));
+}
+.turn .recv-dock {
+	pointer-events: auto;
+}
 /* the camera tools and the panel, at the bottom */
 .recv-dock {
 	position: absolute;
@@ -852,7 +874,9 @@ input[type='range'] {
    fill the screen, so the scan frame is the screen's four corners; the panel becomes one line
    (name, speed, percentage) over the bar at the bottom; the camera tools move up to the end
    of the top bar; and the bar and the panel keep clear of the corners. */
-@media (orientation: landscape) and (max-height: 520px) {
+/* The receiver's layer over the camera picture is a container: wide and low either because
+   the browser turned with the phone, or because the layer itself was turned (.turn.side). */
+@container scan (orientation: landscape) and (max-height: 520px) {
 	.recv-dock {
 		left: 0;
 		right: 0;
