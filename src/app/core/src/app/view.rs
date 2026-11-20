@@ -111,6 +111,18 @@ pub struct Overlay {
     pub frame_h: u32,
     pub rotation: u32,
     pub tone: Tone,
+    /// How far the code is covered, 0 (shown) to 1 (covered).
+    ///
+    /// A code is a field of cells that change many times a second, and in the camera picture
+    /// it is what the eye rests on for the minutes a transfer takes: tiring to look at. Once
+    /// it reads well there is nothing in it to see, so a plain plate lies over it (a little
+    /// larger than the outline) with the progress on it. It thins when the code reads
+    /// badly and is gone when it does not read or is out of view: then the picture is what
+    /// shows the trouble (a reflection, a code half out of the frame). A preference, on at
+    /// first.
+    pub cover: f32,
+    /// The progress to show on the plate ("42%"), empty before any data.
+    pub label: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -165,6 +177,8 @@ pub struct RecvView {
     pub diag: String,
     pub zoom: Option<ZoomView>,
     pub can_switch: bool,
+    /// The code being read is covered (the preference, for the button that changes it).
+    pub cover_on: bool,
     pub overlay: Option<Overlay>,
     pub done: Option<DoneView>,
 }
@@ -302,6 +316,7 @@ fn recv_view(m: &Model) -> RecvView {
         name: t(l, "noData").into(),
         pct: "0%".into(),
         can_switch: r.camera.on && r.camera.devices > 1,
+        cover_on: m.prefs.cover,
         note: r.note.map(|k| t(l, k).to_string()),
         ..Default::default()
     };
@@ -334,8 +349,7 @@ fn recv_view(m: &Model) -> RecvView {
     let mut speed = "–".to_string();
     let mut eta = "–".to_string();
     // data is arriving: then the transfer is going well, whatever share of each frame is read
-    let moving = r.prog_hist.len() >= 2
-        && r.prog_hist.back().zip(r.prog_hist.front()).is_some_and(|(b, f)| b.1 > f.1 && now - b.0 < 2500.0);
+    let moving = super::arriving(r, now);
     if let Some(p) = &r.progress {
         v.name = p.name.clone().unwrap_or_else(|| t(l, "receiving").into());
         let done = r.phase == RecvPhase::Done;
@@ -466,17 +480,27 @@ fn recv_view(m: &Model) -> RecvView {
     v.tip = tip;
     v.tip_ok = ok;
 
-    if let Some(x) = last.filter(|x| x.ok && now - x.at < FOUND_MS && r.phase == RecvPhase::Scanning) {
-        if let Some(points) = x.corners {
-            let tone = if moving || x.frame_rate > 0.8 {
-                Tone::Good
-            } else if x.frame_rate > 0.3 {
-                Tone::Fair
-            } else {
-                Tone::Poor
-            };
-            v.overlay = Some(Overlay { points, frame_w: x.frame_w, frame_h: x.frame_h, rotation: x.rotation, tone });
-        }
+    if let Some(x) = r.seen.as_ref().filter(|x| now - x.at < FOUND_MS && r.phase == RecvPhase::Scanning) {
+        let tone = if moving || x.rate > 0.8 {
+            Tone::Good
+        } else if x.rate > 0.3 {
+            Tone::Fair
+        } else {
+            Tone::Poor
+        };
+        // The cover stays for a second and a half after the code last read well: a plate that
+        // came and went with single captures was worse to look at than the code under it.
+        let cover = if !m.prefs.cover {
+            0.0
+        } else if tone == Tone::Good || now - r.good_at < COVER_HOLD_MS {
+            1.0
+        } else if tone == Tone::Fair {
+            0.5
+        } else {
+            0.0
+        };
+        let label = if v.progress > 0.0 { v.pct.clone() } else { String::new() };
+        v.overlay = Some(Overlay { points: x.points, frame_w: x.frame_w, frame_h: x.frame_h, rotation: x.rotation, tone, cover, label });
     }
 
     if let Some(d) = &r.done {
@@ -562,3 +586,6 @@ fn done_view(m: &Model, d: &super::DoneState) -> DoneView {
 fn followable(cam_fps: f32) -> Option<f32> {
     [120.0, 60.0, 30.0, 20.0, 15.0, 12.0, 10.0].into_iter().find(|&n| n <= 0.7 * cam_fps)
 }
+
+/// How long the cover stays after the code last read well.
+const COVER_HOLD_MS: f64 = 1500.0;

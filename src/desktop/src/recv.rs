@@ -3,8 +3,8 @@
 use crate::app::Root;
 use crate::theme::*;
 use gpui::{
-    canvas, div, img, point, prelude::*, px, AnyElement, Bounds, Context, FontWeight, HighlightStyle, ObjectFit, PathBuilder, Pixels,
-    SharedString, StyledText, Window,
+    canvas, div, img, point, prelude::*, px, AnyElement, App, Bounds, Context, FontWeight, HighlightStyle, ObjectFit, PathBuilder, Pixels,
+    SharedString, StyledText, TextAlign, TextRun, Window,
 };
 use lumen_app::app::view::{DoneView, Overlay, Tone};
 use lumen_app::app::{Event, RecvPhase, Screen};
@@ -20,7 +20,7 @@ pub fn render(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) -> i
         }
         if let (Some(o), Some(image)) = (r.overlay.clone(), root.preview.clone()) {
             let (iw, ih) = (image.size(0).width.0 as f32, image.size(0).height.0 as f32);
-            stage = stage.child(canvas(|_, _, _| {}, move |b, _, window, _| paint_outline(b, &o, iw, ih, window)).absolute().size_full());
+            stage = stage.child(canvas(|_, _, _| {}, move |b, _, window, cx| paint_outline(b, &o, iw, ih, window, cx)).absolute().size_full());
         }
     }
     match r.phase {
@@ -69,8 +69,10 @@ pub fn render(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) -> i
     stage
 }
 
-/// The code outline, from camera-frame pixels onto the cover-fitted preview.
-fn paint_outline(b: Bounds<Pixels>, o: &Overlay, iw: f32, ih: f32, window: &mut Window) {
+/// The code outline, from camera-frame pixels onto the cover-fitted preview; under it the cover
+/// of a code that reads well (see `Overlay::cover` in the core): a plain plate a little larger
+/// than the outline, with the progress on it.
+fn paint_outline(b: Bounds<Pixels>, o: &Overlay, iw: f32, ih: f32, window: &mut Window, cx: &mut App) {
     let (fw, fh) = (o.frame_w as f32, o.frame_h as f32);
     if fw <= 0.0 || iw <= 0.0 {
         return;
@@ -85,6 +87,29 @@ fn paint_outline(b: Bounds<Pixels>, o: &Overlay, iw: f32, ih: f32, window: &mut 
         Tone::Fair => AMBER,
         Tone::Poor => RED,
     });
+    if o.cover > 0.01 {
+        let pts = o.points.map(|p| (ox + p[0] / fw * iw * k, oy + p[1] / fh * ih * k));
+        let (cx0, cy0) = (pts.iter().map(|p| p.0).sum::<f32>() / 4.0, pts.iter().map(|p| p.1).sum::<f32>() / 4.0);
+        // a twentieth larger than the outline: a hand that moves shows no flickering edge
+        let at = |p: (f32, f32)| point(px(cx0 + (p.0 - cx0) * 1.05), px(cy0 + (p.1 - cy0) * 1.05));
+        let mut plate = PathBuilder::fill();
+        plate.move_to(at(pts[0]));
+        for p in &pts[1..] {
+            plate.line_to(at(*p));
+        }
+        plate.close();
+        if let Ok(p) = plate.build() {
+            window.paint_path(p, gpui::rgb(0x0a0d14).opacity(o.cover * 0.97));
+        }
+        if o.cover >= 1.0 && !o.label.is_empty() {
+            let side = ((pts[1].0 - pts[0].0).hypot(pts[1].1 - pts[0].1)).min((pts[3].0 - pts[0].0).hypot(pts[3].1 - pts[0].1));
+            let size = (side * 0.22).clamp(14.0, 34.0);
+            let run = TextRun { len: o.label.len(), font: window.text_style().font(), color: white(0.9), background_color: None, underline: None, strikethrough: None };
+            let line = window.text_system().shape_line(o.label.clone().into(), px(size), &[run], None);
+            let origin = point(px(cx0) - line.width / 2.0, px(cy0 - size * 0.6));
+            let _ = line.paint(origin, px(size * 1.2), TextAlign::Left, None, window, cx);
+        }
+    }
     for (width, alpha) in [(9.0, 0.35), (3.0, 1.0)] {
         let mut path = PathBuilder::stroke(px(width));
         path.move_to(map(o.points[0]));
@@ -227,9 +252,10 @@ fn hud(root: &Root, window: &Window, cx: &mut Context<Root>) -> AnyElement {
         panel = panel.child(more);
     }
     let mut dock = div().w(px(560.)).max_w(px(f32::from(window.viewport_size().width) - 20.)).flex().flex_col().gap(px(10.));
-    if r.zoom.is_some() || r.can_switch {
+    {
         let mut tools = div().flex().justify_end().items_center().gap(px(8.));
-        if let Some(z) = &r.zoom {
+        // (the zoom level shows once zoomed in, as the way back: at 1× it says nothing)
+        if let Some(z) = r.zoom.as_ref().filter(|z| z.active) {
             let rt = root.rt.clone();
             tools = tools.child(
                 div()
@@ -251,6 +277,8 @@ fn hud(root: &Root, window: &Window, cx: &mut Context<Root>) -> AnyElement {
                     .on_click(move |_, _, _| rt.dispatch(Event::ResetZoom)),
             );
         }
+        let rt = root.rt.clone();
+        tools = tools.child(icon_button("cover", if r.cover_on { "eye-off" } else { "eye" }, false, move |_, _| rt.dispatch(Event::ToggleCover)).bg(gpui::rgba(0x0c1017db)));
         if r.can_switch {
             let rt = root.rt.clone();
             tools = tools.child(icon_button("switch", "switch", false, move |_, _| rt.dispatch(Event::SwitchCamera)).bg(gpui::rgba(0x0c1017db)));

@@ -95,7 +95,16 @@ data class SendVM(
 data class ZoomVM(val level: Float, val min: Float, val max: Float, val label: String, val active: Boolean)
 
 @Serializable
-data class OverlayVM(val points: List<List<Float>>, val frameW: Int, val frameH: Int, val rotation: Int, val tone: String)
+data class OverlayVM(
+    val points: List<List<Float>>,
+    val frameW: Int,
+    val frameH: Int,
+    val rotation: Int,
+    val tone: String,
+    /** How far the code is covered by a plain plate, 0…1, and the progress shown on it. */
+    val cover: Float = 0f,
+    val label: String = "",
+)
 
 @Serializable
 data class DoneVM(
@@ -143,6 +152,7 @@ data class RecvVM(
     val diag: String,
     val zoom: ZoomVM? = null,
     val canSwitch: Boolean,
+    val coverOn: Boolean = true,
     val overlay: OverlayVM? = null,
     val done: DoneVM? = null,
 )
@@ -177,6 +187,7 @@ object Ev {
     val closeSend = e("close_send")
     val openCamera = e("open_camera")
     val switchCamera = e("switch_camera")
+    val toggleCover = e("toggle_cover")
     fun zoom(level: Float) = buildJsonObject { put("type", "set_zoom"); put("level", level) }
     val resetZoom = e("reset_zoom")
     val pickImage = e("pick_image")

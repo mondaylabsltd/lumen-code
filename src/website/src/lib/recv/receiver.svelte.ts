@@ -103,6 +103,9 @@ export class ReceiveController {
 	tipGood = $state(false);
 	diag = $state('');
 	multiCam = $state(false);
+	// The code being read is covered by a plain plate (see drawOverlay); the person's choice
+	// is kept in this browser.
+	cover = $state(ReceiveController.savedCover());
 	zoom = $state<{ min: number; max: number } | null>(null);
 	zoomLevel = $state(0);
 	done = $state<Done | null>(null);
@@ -1317,6 +1320,37 @@ export class ReceiveController {
 	}
 
 	// ---------- overlay: detected code outline
+	private static savedCover() {
+		try {
+			return localStorage.getItem('lumen-cover') !== '0';
+		} catch {
+			return true;
+		}
+	}
+
+	toggleCover() {
+		this.cover = !this.cover;
+		try {
+			localStorage.setItem('lumen-cover', this.cover ? '1' : '0');
+		} catch {
+			/* a browser without storage: the choice lasts for this visit */
+		}
+	}
+
+	// The detected code's outline and, under it, its cover.
+	//
+	// A code is a field of cells that change many times a second, and in the camera picture
+	// it is what the eye rests on for the minutes a transfer takes: tiring to look at. Once
+	// it reads well there is nothing in it to see, so a plain plate lies over it (a twentieth
+	// larger than the outline, so that a hand that moves shows no flickering edge) with the
+	// progress on it. It thins when the code reads badly and goes when it does not read or is
+	// out of view: then the picture is what shows the trouble (a reflection, a code half out
+	// of the frame). On at first; the eye button switches it off.
+	private coverAlpha = 0;
+	private coverPts: number[][] | null = null;
+	private coverAt = -1e9;
+	private coverRate = 0;
+	private goodAt = -1e9;
 	private drawOverlay(d: any) {
 		const overlay = this.overlay;
 		const octx = this.octx;
@@ -1329,29 +1363,92 @@ export class ReceiveController {
 		}
 		octx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		octx.clearRect(0, 0, W, H);
-		if (!d.ok || !d.stats) return;
-		const [iw, ih] = [d.w, d.h];
-		const scale = Math.max(W / iw, H / ih); // object-fit: cover
-		const ox = (W - iw * scale) / 2;
-		const oy = (H - ih * scale) / 2;
-		const pts = d.stats.corners.map(([x, y]: number[]) => [ox + x * scale, oy + y * scale]);
-		const e = d.frameKey && this.frameDone.get(d.frameKey);
-		const rate =
-			e && e.total
-				? e.ok.size / e.total
-				: d.skipped
-					? 1
-					: d.stats.cwCount
-						? (d.okIdx || []).length / d.stats.cwCount
-						: 0;
-		const color = this.moving() || rate > 0.8 ? '#2bdc74' : rate > 0.3 ? '#ffd60a' : '#ff5468';
+		// Not every capture is read: with sender and camera at the same rate, runs of them fall
+		// into the frame change and fail. The place of the last scan that located the code is
+		// kept for 0.7 s, its corners smoothed (a held phone moves them a pixel or two from
+		// scan to scan; a real move is followed almost at once), and the cover stays for 1.5 s
+		// after the code last read well: an outline and a plate that came and went with single
+		// captures were worse to look at than the code under them.
+		const now = performance.now();
+		if (d.ok && d.stats) {
+			const [iw, ih] = [d.w, d.h];
+			const scale = Math.max(W / iw, H / ih); // object-fit: cover
+			const ox = (W - iw * scale) / 2;
+			const oy = (H - ih * scale) / 2;
+			const fresh: number[][] = d.stats.corners.map(([x, y]: number[]) => [
+				ox + x * scale,
+				oy + y * scale
+			]);
+			const prev = now - this.coverAt < 1000 ? this.coverPts : null;
+			if (prev) {
+				const far = Math.max(
+					...fresh.map((p, i) => Math.max(Math.abs(p[0] - prev[i][0]), Math.abs(p[1] - prev[i][1])))
+				);
+				const k = far > Math.max(W, H) / 30 ? 0.7 : 0.25;
+				this.coverPts = fresh.map((p, i) => [
+					prev[i][0] + k * (p[0] - prev[i][0]),
+					prev[i][1] + k * (p[1] - prev[i][1])
+				]);
+			} else this.coverPts = fresh;
+			this.coverAt = now;
+			const e = d.frameKey && this.frameDone.get(d.frameKey);
+			this.coverRate =
+				e && e.total
+					? e.ok.size / e.total
+					: d.skipped
+						? 1
+						: d.stats.cwCount
+							? (d.okIdx || []).length / d.stats.cwCount
+							: 0;
+		}
+		const seen = now - this.coverAt < 700;
+		let color = '';
+		let target = 0;
+		if (seen) {
+			const good = this.moving() || this.coverRate > 0.8;
+			if (good) this.goodAt = now;
+			color = good ? '#2bdc74' : this.coverRate > 0.3 ? '#ffd60a' : '#ff5468';
+			if (this.cover)
+				target = good || now - this.goodAt < 1500 ? 1 : this.coverRate > 0.3 ? 0.5 : 0;
+		}
+		// (this runs with every scan, some thirty times a second: the plate fades over a few)
+		this.coverAlpha += (target - this.coverAlpha) * 0.3;
+		const pts = this.coverPts;
+		if (!pts) return;
+		if (this.coverAlpha > 0.02) {
+			const cx = pts.reduce((a, p) => a + p[0], 0) / 4;
+			const cy = pts.reduce((a, p) => a + p[1], 0) / 4;
+			octx.shadowBlur = 0;
+			octx.fillStyle = `rgba(10, 13, 20, ${(this.coverAlpha * 0.97).toFixed(3)})`;
+			octx.beginPath();
+			pts.forEach(([x, y], i) => {
+				const [px, py] = [cx + (x - cx) * 1.05, cy + (y - cy) * 1.05];
+				if (i) octx.lineTo(px, py);
+				else octx.moveTo(px, py);
+			});
+			octx.closePath();
+			octx.fill();
+			if (this.coverAlpha > 0.9 && this.pct > 0) {
+				const side = Math.min(
+					Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]),
+					Math.hypot(pts[3][0] - pts[0][0], pts[3][1] - pts[0][1])
+				);
+				const size = Math.max(14, Math.min(34, side * 0.22));
+				octx.fillStyle = `rgba(255, 255, 255, ${(0.9 * this.coverAlpha).toFixed(3)})`;
+				octx.font = `600 ${size}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+				octx.textAlign = 'center';
+				octx.textBaseline = 'middle';
+				octx.fillText(`${Math.floor(this.pct)}%`, cx, cy);
+			}
+		}
+		if (!seen) return;
 		octx.lineWidth = 3;
 		octx.strokeStyle = color;
 		octx.lineJoin = 'round';
 		octx.shadowColor = color;
 		octx.shadowBlur = 12;
 		octx.beginPath();
-		pts.forEach(([x, y]: number[], i: number) => (i ? octx.lineTo(x, y) : octx.moveTo(x, y)));
+		pts.forEach(([x, y], i) => (i ? octx.lineTo(x, y) : octx.moveTo(x, y)));
 		octx.closePath();
 		octx.stroke();
 	}

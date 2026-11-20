@@ -17,7 +17,7 @@ struct ReceiveScreen: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if r.cameraOn || r.cameraStarting {
-                CameraPreview(model: model, overlay: r.overlay, zoom: r.zoom?.level)
+                CameraPreview(model: model, overlay: r.overlay, zoom: r.zoom?.level, quarter: tilt.quarter)
                     .ignoresSafeArea()
             }
             if r.phase == "scanning" {
@@ -99,7 +99,7 @@ private struct ScanChrome: View {
             // On its side the screen is wide and low, and the code fills it: the panel becomes
             // one line and a bar, and the camera tools move up into the top bar.
             let compact = g.size.width > g.size.height
-            let tools = recv.zoom != nil || recv.canSwitch
+            let tools = true // the cover button is always there
             ZStack {
                 // Where to put the code; once one is found its outline takes over. Upright,
                 // the frame is the space between the bar and the panel. On its side the code
@@ -250,7 +250,8 @@ private struct CamTools: View {
     var body: some View {
         HStack(spacing: 8) {
             Spacer()
-            if let z = recv.zoom {
+            // (the zoom level shows once zoomed in, as the way back: at 1× it says nothing)
+            if let z = recv.zoom, z.active {
                 Button { model.dispatch(Ev.resetZoom) } label: {
                     Text(z.label)
                         .font(Theme.mono(13, .semibold))
@@ -264,6 +265,10 @@ private struct CamTools: View {
                 .accessibilityLabel(model.t("zoomHint"))
                 .accessibilityValue(z.label)
             }
+            Button { model.dispatch(Ev.toggleCover) } label: { Image(systemName: recv.coverOn ? "eye.slash" : "eye") }
+                .buttonStyle(IconButtonStyle(background: Theme.panelOpaque))
+                .accessibilityLabel(model.t("cover"))
+                .accessibilityAddTraits(recv.coverOn ? .isSelected : [])
             if recv.canSwitch {
                 Button { model.dispatch(Ev.switchCamera) } label: { Image(systemName: "arrow.triangle.2.circlepath.camera") }
                     .buttonStyle(IconButtonStyle(background: Theme.panelOpaque))

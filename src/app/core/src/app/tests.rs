@@ -444,6 +444,64 @@ fn small_cells_that_do_not_decode_ask_for_closer_or_sparser() {
     assert!(!(tip.contains("靠近") || tip.contains("closer") || tip.contains("分不清")), "{tip}");
 }
 
+/// The code being read is covered while it reads well, and stays covered through captures
+/// that fail or read badly for a moment; less after a second and a half of poor reading, not
+/// at all when it does not read; and never once the person has switched the cover off.
+#[test]
+fn a_code_that_reads_well_is_covered_and_stays_so() {
+    use crate::engine::recv::{LiveStats, ScanReport};
+    let mut m = Model { screen: Screen::Receive, ..Model::default() };
+    m.recv.phase = RecvPhase::Scanning;
+    m.recv.found = true;
+    let corners = Some([[100.0, 100.0], [900.0, 100.0], [900.0, 600.0], [100.0, 600.0]]);
+    let scan = |at: f64, ok: bool, rate: f32| ScanReport { at, ok, frame_rate: rate, stats: LiveStats { last_found_at: at, ..LiveStats::default() }, corners: if ok { corners } else { None }, frame_w: 1920, frame_h: 1080, ..Default::default() };
+    let mut feed = |m: &mut Model, at: f64, ok: bool, rate: f32| {
+        let _ = super::update(Event::Scanned(Box::new(scan(at, ok, rate))), m);
+        m.now = at;
+        view::view(m).recv.overlay.map(|o| o.cover)
+    };
+    assert_eq!(feed(&mut m, 1000.0, true, 0.95), Some(1.0));
+    assert!(view::view(&m).recv.cover_on);
+    // captures that fail (the frame change) and one that reads badly: still there, covered
+    assert_eq!(feed(&mut m, 1033.0, false, 0.0), Some(1.0));
+    assert_eq!(feed(&mut m, 1066.0, false, 0.0), Some(1.0));
+    assert_eq!(feed(&mut m, 1100.0, true, 0.2), Some(1.0));
+    // badly for a second and a half: thinner, then gone
+    assert_eq!(feed(&mut m, 2700.0, true, 0.5), Some(0.5));
+    assert_eq!(feed(&mut m, 2800.0, true, 0.1), Some(0.0));
+    // not located for longer than the outline is kept: nothing to cover
+    assert_eq!(feed(&mut m, 3600.0, false, 0.0), None);
+    // switched off: shown whatever it reads, and the choice is kept
+    assert_eq!(feed(&mut m, 4000.0, true, 0.95), Some(1.0));
+    let _ = super::update(Event::ToggleCover, &mut m);
+    assert_eq!(view::view(&m).recv.overlay.map(|o| o.cover), Some(0.0));
+    assert!(!view::view(&m).recv.cover_on && !m.prefs.cover);
+    // preferences stored before the cover existed have it on
+    let old: Prefs = serde_json::from_str(&serde_json::to_string(&Prefs::default()).unwrap().replace(",\"cover\":true", "")).unwrap();
+    assert!(old.cover);
+}
+
+/// The corners the outline is drawn with do not tremble with the scans, and follow a real move.
+#[test]
+fn the_outline_is_steady_and_follows_a_move() {
+    use crate::engine::recv::{LiveStats, ScanReport};
+    let mut m = Model { screen: Screen::Receive, ..Model::default() };
+    m.recv.phase = RecvPhase::Scanning;
+    let at_x = |x: f32| Some([[x, 100.0], [x + 800.0, 100.0], [x + 800.0, 600.0], [x, 600.0]]);
+    let mut feed = |m: &mut Model, at: f64, x: f32| {
+        let _ = super::update(Event::Scanned(Box::new(ScanReport { at, ok: true, frame_rate: 0.9, stats: LiveStats { last_found_at: at, ..LiveStats::default() }, corners: at_x(x), frame_w: 1920, frame_h: 1080, ..Default::default() })), m);
+        m.now = at;
+        view::view(m).recv.overlay.unwrap().points[0][0]
+    };
+    assert_eq!(feed(&mut m, 1000.0, 100.0), 100.0);
+    // two pixels of tremble: a quarter of it shows
+    let x = feed(&mut m, 1033.0, 102.0);
+    assert!((x - 100.5).abs() < 0.01, "{x}");
+    // the phone moved by 200 pixels: most of the way at once
+    let x = feed(&mut m, 1066.0, 300.0);
+    assert!(x > 235.0 && x < 245.0, "{x}");
+}
+
 /// A warm phone keeps the fast capture mode (fair, serious): giving it up is the loss of rate
 /// the person came to avoid. Only the critical level, where the system is about to stop the
 /// camera itself, takes it back to 60.
@@ -474,7 +532,9 @@ fn receive_feedback_follows_progress() {
     let v = view::view(&m).recv;
     assert_eq!((v.name.as_str(), v.line.as_str()), (crate::i18n::t(Lang::En, "noData"), ""));
     let stats = LiveStats { last_found_at: now - 100.0, cov_ok: 20, cov_tot: 100, cell: 5.0, cell_n: 5, ..LiveStats::default() };
-    m.recv.last = Some(ScanReport { ok: true, at: now - 100.0, corners: Some([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]), frame_rate: 0.2, stats, ..ScanReport::default() });
+    let corners = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+    m.recv.last = Some(ScanReport { ok: true, at: now - 100.0, corners: Some(corners), frame_rate: 0.2, stats, ..ScanReport::default() });
+    m.recv.seen = Some(super::Seen { points: corners, frame_w: 0, frame_h: 0, rotation: 0, rate: 0.2, at: now - 100.0 });
     m.recv.progress = Some(ProgressFact { received: 40, needed: Some(100), t: 200, ..ProgressFact::default() });
 
     m.recv.prog_hist = [(now - 2000.0, 10), (now - 500.0, 40)].into_iter().collect();

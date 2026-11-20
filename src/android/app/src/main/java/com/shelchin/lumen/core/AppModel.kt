@@ -69,6 +69,7 @@ class AppModel(private val activity: MainActivity) {
     private fun moved(a: OverlayVM?, b: OverlayVM?): Boolean {
         if (a == null || b == null) return a !== b
         if (a.tone != b.tone || a.frameW != b.frameW || a.frameH != b.frameH || a.rotation != b.rotation) return true
+        if (a.cover != b.cover || a.label != b.label) return true
         for (i in a.points.indices) {
             val p = a.points[i]
             val q = b.points.getOrNull(i) ?: return true

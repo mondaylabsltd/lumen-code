@@ -16,6 +16,10 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Constraints
 import kotlin.math.abs
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -108,7 +112,7 @@ fun ReceiveScreen(model: AppModel, v: ViewModel) {
                     factory = { model.camera.previewView.also { (it.parent as? ViewGroup)?.removeView(it) } },
                     modifier = Modifier.fillMaxSize(),
                 )
-                OutlineLayer(model)
+                OutlineLayer(model, if (r.phase == "scanning") rememberTilt() else 0)
             }
         }
         if (r.phase == "scanning") {
@@ -157,7 +161,8 @@ private fun TopBar(model: AppModel, r: RecvVM) {
 @Composable
 private fun CamTools(model: AppModel, r: RecvVM) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        r.zoom?.let { z ->
+        // (the zoom level shows once zoomed in, as the way back: at 1× it says nothing)
+        r.zoom?.takeIf { it.active }?.let { z ->
             Box(
                 Modifier
                     .clip(CircleShape)
@@ -169,6 +174,7 @@ private fun CamTools(model: AppModel, r: RecvVM) {
                 contentAlignment = Alignment.Center,
             ) { Text(z.label, style = mono(13.sp, FontWeight.SemiBold), color = Lumen.text) }
         }
+        IconBtn(if (r.coverOn) Icons.eyeOff else Icons.eye, model.t("cover"), background = Color(0xDB0C1017), size = 48.dp) { model.dispatch(Ev.toggleCover) }
         if (r.canSwitch) IconBtn(Icons.switchCamera, model.t("switchCam"), background = Color(0xDB0C1017), size = 48.dp) { model.dispatch(Ev.switchCamera) }
     }
 }
@@ -239,21 +245,31 @@ private fun Turned(quarter: Int, content: @Composable () -> Unit) {
     }
 }
 
-/** The detected code outline, mapped from camera-frame pixels onto the fill-centred preview. */
-/** The outline, in its own scope: it changes 20 times a second, the rest of the screen does not. */
+/**
+ * The outline, in its own scope: it changes 20 times a second, the rest of the screen does not.
+ * Under it the cover of a code that reads well (see Overlay::cover in the core): a plain plate a
+ * little larger than the outline, with the progress on it. The plate fades in and out; its
+ * shape follows the code at once, and it keeps the last shape while it fades out.
+ */
 @Composable
-private fun OutlineLayer(model: AppModel) {
-    val o = model.overlay ?: return
-    Outline(o, model.camera.mirrored)
+private fun OutlineLayer(model: AppModel, quarter: Int) {
+    val now = model.overlay
+    var last by remember { mutableStateOf<OverlayVM?>(null) }
+    if (now != null) last = now
+    val cover by animateFloatAsState(now?.cover ?: 0f, tween(250), label = "cover")
+    val o = now ?: last?.takeIf { cover > 0.01f } ?: return
+    Outline(o, model.camera.mirrored, outlined = now != null, cover = cover, quarter = quarter)
 }
 
+/** The detected code outline, mapped from camera-frame pixels onto the fill-centred preview. */
 @Composable
-private fun Outline(o: OverlayVM, mirrored: Boolean) {
+private fun Outline(o: OverlayVM, mirrored: Boolean, outlined: Boolean, cover: Float, quarter: Int) {
     val color = when (o.tone) {
         "good" -> Lumen.green
         "fair" -> Lumen.amber
         else -> Lumen.red
     }
+    val measurer = rememberTextMeasurer()
     Canvas(Modifier.fillMaxSize()) {
         if (o.points.size != 4 || o.frameW <= 0) return@Canvas
         // the preview and the analysed frames are the same 16:9 stream, shown upright and
@@ -274,8 +290,26 @@ private fun Outline(o: OverlayVM, mirrored: Boolean) {
             val px = ox + rx * k
             return Offset(if (mirrored) size.width - px else px, oy + ry * k)
         }
+        val pts = o.points.map(::map)
+        if (cover > 0.01f) {
+            // a twentieth larger than the outline: a hand that moves shows no flickering edge
+            val c = Offset(pts.sumOf { it.x.toDouble() }.toFloat() / 4, pts.sumOf { it.y.toDouble() }.toFloat() / 4)
+            val plate = Path().apply {
+                pts.forEachIndexed { i, p -> (c + (p - c) * 1.05f).let { if (i == 0) moveTo(it.x, it.y) else lineTo(it.x, it.y) } }
+                close()
+            }
+            drawPath(plate, Color(0xFF0A0D14).copy(alpha = cover * 0.97f))
+            if (cover > 0.9f && o.label.isNotEmpty()) {
+                val side = minOf((pts[1] - pts[0]).getDistance(), (pts[3] - pts[0]).getDistance())
+                val text = measurer.measure(o.label, mono((side * 0.22f).coerceIn(14.sp.toPx(), 34.sp.toPx()).toSp(), FontWeight.SemiBold))
+                rotate(90f * quarter, c) {
+                    drawText(text, Color.White.copy(alpha = 0.9f * cover), Offset(c.x - text.size.width / 2f, c.y - text.size.height / 2f))
+                }
+            }
+        }
+        if (!outlined) return@Canvas
         val path = Path().apply {
-            o.points.forEachIndexed { i, p -> map(p).let { if (i == 0) moveTo(it.x, it.y) else lineTo(it.x, it.y) } }
+            pts.forEachIndexed { i, p -> if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y) }
             close()
         }
         drawPath(path, color.copy(alpha = 0.35f), style = Stroke(width = 9.dp.toPx(), join = StrokeJoin.Round))

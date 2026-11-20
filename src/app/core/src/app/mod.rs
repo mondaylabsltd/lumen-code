@@ -118,6 +118,13 @@ pub struct Prefs {
     /// Which defaults these choices started from (see [`Prefs::migrated`]).
     #[serde(default)]
     pub defaults: u32,
+    /// The receiver covers the code it is reading (see [`view::Overlay::cover`]).
+    #[serde(default = "yes")]
+    pub cover: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// The current generation of defaults. 2: a desktop sender starts at 60 fps, densest grid.
@@ -125,7 +132,7 @@ pub const DEFAULTS: u32 = 2;
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { lang: None, density: Density::Auto, mode: 1, ecc: 1, fps: 12, source: SourceTab::File, reader: ReaderPrefs::default(), flash_ok: false, defaults: DEFAULTS }
+        Prefs { lang: None, density: Density::Auto, mode: 1, ecc: 1, fps: 12, source: SourceTab::File, reader: ReaderPrefs::default(), flash_ok: false, defaults: DEFAULTS, cover: true }
     }
 }
 
@@ -300,6 +307,8 @@ pub enum Event {
     CloseSend,
     OpenCamera,
     SwitchCamera,
+    /// Cover the code being read, or show it (remembered).
+    ToggleCover,
     SetZoom { level: f32 },
     ResetZoom,
     PickImage,
@@ -430,6 +439,10 @@ pub(crate) struct RecvState {
     /// one capture per sender frame it swings with the phase between the two clocks, and
     /// advice must not swing with it.
     pub ok_slow: f32,
+    /// The code as last located, for the outline and the cover (see [`Seen`]).
+    pub seen: Option<Seen>,
+    /// When the code last read well (data arriving, or most of a frame decoded).
+    pub good_at: f64,
     pub lost_at: f64,
     pub done: Option<DoneState>,
     /// A one-line note on the start screen (e.g. no code in the chosen image).
@@ -437,6 +450,48 @@ pub(crate) struct RecvState {
     pub tick_attempt: u64,
     pub ticking: bool,
     pub from_image: bool,
+}
+
+/// Where the code is, as the outline and the cover show it.
+///
+/// Not every capture is read: with sender and camera at the same rate, runs of captures fall
+/// into the frame change and fail, a third of a second at a time. An outline drawn from the
+/// last scan alone came and went with them (seen on an iPhone: there in six snapshots of
+/// sixteen, during a transfer at 500 KB/s). So the place of the last scan that located the
+/// code is kept for [`FOUND_MS`], and its corners are smoothed: a held phone moves them a
+/// pixel or two from scan to scan, which a plate the size of the code shows as a tremble. A
+/// real move (more than a thirtieth of the frame) is followed almost at once.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Seen {
+    pub points: [[f32; 2]; 4],
+    pub frame_w: u32,
+    pub frame_h: u32,
+    pub rotation: u32,
+    /// The share of the frame that decoded in that scan.
+    pub rate: f32,
+    pub at: f64,
+}
+
+impl Seen {
+    fn follow(prev: Option<&Seen>, report: &ScanReport) -> Option<Seen> {
+        let new = report.corners?;
+        let mut points = new;
+        if let Some(p) = prev.filter(|p| (p.frame_w, p.frame_h, p.rotation) == (report.frame_w, report.frame_h, report.rotation) && report.at - p.at < 1000.0) {
+            let far = (0..4).map(|i| (new[i][0] - p.points[i][0]).abs().max((new[i][1] - p.points[i][1]).abs())).fold(0.0, f32::max);
+            let k = if far > report.frame_w.max(report.frame_h) as f32 / 30.0 { 0.7 } else { 0.25 };
+            for i in 0..4 {
+                for j in 0..2 {
+                    points[i][j] = p.points[i][j] + k * (new[i][j] - p.points[i][j]);
+                }
+            }
+        }
+        Some(Seen { points, frame_w: report.frame_w, frame_h: report.frame_h, rotation: report.rotation, rate: report.frame_rate, at: report.at })
+    }
+}
+
+/// Data is arriving: then the transfer is going well, whatever share of each frame is read.
+pub(crate) fn arriving(r: &RecvState, now: f64) -> bool {
+    r.prog_hist.len() >= 2 && r.prog_hist.back().zip(r.prog_hist.front()).is_some_and(|(b, f)| b.1 > f.1 && now - b.0 < 2500.0)
 }
 
 impl Default for RecvState {
@@ -454,6 +509,8 @@ impl Default for RecvState {
             milestone: 0,
             found: false,
             ok_slow: -1.0,
+            seen: None,
+            good_at: f64::NEG_INFINITY,
             lost_at: 0.0,
             done: None,
             note: None,
@@ -727,6 +784,10 @@ fn update(event: Event, model: &mut Model) -> Cmd {
             start_camera(model)
         }
         Event::CameraAnswer { attempt, out } => camera_answer(model, attempt, out),
+        Event::ToggleCover => {
+            model.prefs.cover = !model.prefs.cover;
+            Command::all([haptic(HapticKind::Selection), save_prefs(model)])
+        }
         Event::SwitchCamera => {
             let cam = &mut model.recv.camera;
             if cam.devices < 2 || !cam.on {
@@ -1165,6 +1226,14 @@ fn scanned(model: &mut Model, report: ScanReport) -> Cmd {
     } else if r.found && report.at - report.stats.last_found_at > FOUND_MS {
         r.found = false;
         r.lost_at = report.at;
+    }
+    if report.ok {
+        if let Some(seen) = Seen::follow(r.seen.as_ref(), &report) {
+            r.seen = Some(seen);
+        }
+        if report.frame_rate > 0.8 || arriving(r, report.at) {
+            r.good_at = report.at;
+        }
     }
     r.last = Some(report);
     cmd

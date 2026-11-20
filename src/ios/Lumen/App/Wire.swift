@@ -110,6 +110,9 @@ struct OverlayVM: Decodable, Equatable {
     var frameH: UInt32
     var rotation: UInt32
     var tone: String // good | fair | poor
+    /// How far the code is covered by a plain plate, 0…1, and the progress shown on it.
+    var cover: Float
+    var label: String
 }
 
 struct DoneVM: Decodable, Equatable {
@@ -156,6 +159,7 @@ struct RecvVM: Decodable, Equatable {
     var diag: String
     var zoom: ZoomVM?
     var canSwitch: Bool
+    var coverOn: Bool
     var overlay: OverlayVM?
     var done: DoneVM?
 }
@@ -184,6 +188,7 @@ enum Ev {
     static let closeSend: [String: Any] = ["type": "close_send"]
     static let openCamera: [String: Any] = ["type": "open_camera"]
     static let switchCamera: [String: Any] = ["type": "switch_camera"]
+    static let toggleCover: [String: Any] = ["type": "toggle_cover"]
     static func zoom(_ level: Float) -> [String: Any] { ["type": "set_zoom", "level": level] }
     static let resetZoom: [String: Any] = ["type": "reset_zoom"]
     static let pickImage: [String: Any] = ["type": "pick_image"]

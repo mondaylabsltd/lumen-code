@@ -156,6 +156,7 @@ const DICT: &[(&str, &str, &str)] = &[
     ("camBusy", "相机正被另一个程序占用。关闭它（或另一个 Lumen Code 窗口）后再试。", "Another program is using the camera. Close it (or another Lumen Code window) and try again."),
     ("openSettings", "打开设置", "Open Settings"),
     ("switchCam", "切换相机", "Switch camera"),
+    ("cover", "遮住正在读取的码", "Cover the code being read"),
     ("native", "Rust 原生", "Rust native"),
     ("imageNoCode", "这张图片里没有找到 Lumen 码。", "No Lumen code was found in this image."),
     ("readFailed", "无法读取这个文件。", "This file could not be read."),
