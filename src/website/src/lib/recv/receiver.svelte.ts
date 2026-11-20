@@ -623,7 +623,29 @@ export class ReceiveController {
 	}
 
 	// ---------- camera
-	async openCamera(): Promise<void> {
+	// One at a time. Two that overlap (a double tap on the button, a flip while the camera is
+	// still opening) took the stream from under each other: the first went on with no track,
+	// failed, and the page stayed on its start screen. A call waits for the one before it; of
+	// those waiting the last decides; and a camera that is open as asked is left open.
+	openCamera(): Promise<void> {
+		const call = ++this.openCalls;
+		const run = this.opening.then(async () => {
+			if (call !== this.openCalls) return;
+			const open = this.track?.readyState === 'live' && this.running;
+			if (open && this.openedFor === this.cameraAsked()) return;
+			await this.openNow();
+		});
+		this.opening = run.catch(() => {});
+		return run;
+	}
+	private opening: Promise<void> = Promise.resolve();
+	private openCalls = 0;
+	private openedFor = ''; // cameraAsked() of the camera that is open
+	private cameraAsked(): string {
+		return this.cycling ? `camera ${this.deviceIdx}` : this.facing;
+	}
+
+	private async openNow(): Promise<void> {
 		this.startErr = '';
 		if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
 			this.startErr = this.t('needHttps');
@@ -697,7 +719,7 @@ export class ReceiveController {
 			const main = mains[this.facing];
 			if (!named && main && main !== cur) {
 				this.mains = mains;
-				return this.openCamera();
+				return this.openNow();
 			}
 			if (mains.environment || mains.user) this.mains = mains;
 			// flipping is back and front where cameras have a side; else round all of them
@@ -714,6 +736,7 @@ export class ReceiveController {
 		video.removeAttribute('src');
 		video.loop = false;
 		await video.play().catch(() => {});
+		this.openedFor = this.cameraAsked();
 		this.setupTrackControls();
 		this.beginScanning();
 	}
@@ -737,6 +760,7 @@ export class ReceiveController {
 		if (this.stream) for (const tr of this.stream.getTracks()) tr.stop();
 		this.stream = null;
 		this.track = null;
+		this.openedFor = '';
 	}
 
 	// The camera's rate follows the sender: each sender frame needs two captures (a screen takes
