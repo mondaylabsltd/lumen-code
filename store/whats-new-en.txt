@@ -1,8 +1,9 @@
-Send from your photo library, and clearer guidance while receiving.
+Easier on the eyes while receiving, and photos from your library.
 
+- The code being read is covered by a plain plate with the progress on it, so you are not looking at a flickering picture. The eye button shows the code again.
+- The outline of the code stays steady while receiving.
 - Choose a picture or a video from Photos to send, not only a file.
 - When the cells of a code are too small for the camera, the app says to move closer, or to lower the density on the sender.
-- Advice on the sender's frame rate follows what the camera can keep up with.
-- Android: the outline of the code follows a phone held on its side, and the focus is set once on the code and held.
+- Android: the outline follows a phone held on its side, and the focus is set once on the code and held.
 
 Compatible with Protocol 1.0 and earlier 1.0 apps.

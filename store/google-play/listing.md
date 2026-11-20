@@ -1,6 +1,6 @@
-# Google Play listing — 1.2.1
+# Google Play listing — 1.2.2
 
-版本名 `1.2.1`，versionCode `7`，包名 `ltd.mondaylabs.lumencode`。新建应用时选择“付费”；基准价格 US$2.99，地区价格在控制台确认。
+版本名 `1.2.2`，versionCode `8`，包名 `ltd.mondaylabs.lumencode`。新建应用时选择“付费”；基准价格 US$2.99，地区价格在控制台确认。
 
 | Field | en-US | zh-CN |
 |---|---|---|

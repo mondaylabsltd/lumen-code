@@ -10,7 +10,12 @@ The website receives several times faster and now works in Chrome on Android; th
 
 What a camera needs differs: an iPhone 15 Pro or a Galaxy S22 reads cells of 3.5 camera pixels, a Redmi K40 and a MacBook's built-in camera need 6 to 7. Browsers open phone cameras at 1080p and 30 frames a second, so the website receives at about half the rate of the apps or less. Conditions and all figures are in the [performance guide](https://github.com/mondaylabsltd/lumen-code/blob/main/docs/guide/04-performance.md).
 
-1.2.1 follows 1.2.0 the same evening with one addition for the phone apps: the send screen takes a picture or a video from the photo library, where it opened the file picker only. Tried on a Galaxy S22; on iPhone it is built and not yet confirmed. The desktop and the website are as in 1.2.0.
+1.2.1 added to the phone apps: the send screen takes a picture or a video from the photo library, where it opened the file picker only.
+
+1.2.2 adds two things:
+
+- Receivers cover the code they are reading. A code that changes many times a second is tiring to look at, and once it reads well there is nothing in it to see: a plain dark plate lies over it with the progress on it, thins when the code reads badly and goes when it does not read. The eye button among the camera tools switches it off. The outline of the code no longer comes and goes with single captures.
+- Website on phones with several cameras: the receiver opens the main camera at the back. Chrome on a Galaxy S22 gave its ultra-wide, with which the phone had to be held very close. The flip button goes between the main camera at the back and the one at the front, where it used to go round every lens.
 
 Not measured for this version: the Galaxy S22 with the Android app, and Windows and Linux with a camera.
 

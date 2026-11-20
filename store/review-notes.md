@@ -1,4 +1,4 @@
-# Notes for app review — 1.2.1
+# Notes for app review — 1.2.2
 
 以下英文可直接粘贴进 App Store 的审核备注。Google Play 的“应用访问权限”可说明所有功能无需账号或登录；接收需要另一块屏幕，不是账号访问限制。
 
