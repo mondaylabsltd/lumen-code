@@ -1,7 +1,7 @@
 // The build of these pages: the last commit of the site's sources, its date, and whether they
 // had uncommitted changes (src/tools/build.js). src/tools/build.js writes the real values into dist/js/version.js; the
 // sources served by the dev server say "dev".
-export const BUILD = {"commit":"64a652f","full":"64a652f6410115d0fa88cd11153018be5ed48c3c","date":"2026-11-17","dirty":false,"protocol":"1.0"};
+export const BUILD = {"commit":"48dbab9","full":"48dbab98aec1ea101cd8eec238c21e565f585522","date":"2026-11-20","dirty":false,"protocol":"1.0"};
 
 // "Version 1a2b3c4 · 2026-10-20" — what a user quotes in a report
 export function buildText(label) {
